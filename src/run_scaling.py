@@ -107,20 +107,53 @@ def main():
 
     # Plotting
     cf_mean = np.mean(res_cf, axis=1)
+    cf_std = np.std(res_cf, axis=1)
     ours_mean = np.mean(res_ours, axis=1)
+    ours_std = np.std(res_ours, axis=1)
+    offsets = np.linspace(-0.08, 0.08, len(SEEDS))
 
     plt.figure(figsize=(10, 6))
     plt.plot(SAMPLE_SIZES, cf_mean, label="Causal Forest", color="#1f77b4", marker="^", linestyle="--")
-    plt.plot(SAMPLE_SIZES, ours_mean, label="CTRL-DML (Ours)", color="#2ca02c", marker="s", linestyle="-", linewidth=2.5)
+    plt.fill_between(SAMPLE_SIZES, cf_mean - cf_std, cf_mean + cf_std, color="#1f77b4", alpha=0.12)
+    for idx, _ in enumerate(SEEDS):
+        plt.scatter(np.array(SAMPLE_SIZES) * (1 + offsets[idx]), res_cf[:, idx], color="#1f77b4", alpha=0.4, s=40, label="_nolegend_")
 
-    plt.xlabel("Sample Size (N)")
+    plt.plot(SAMPLE_SIZES, ours_mean, label="CTRL-DML (Ours)", color="#2ca02c", marker="s", linestyle="-", linewidth=2.5)
+    plt.fill_between(SAMPLE_SIZES, ours_mean - ours_std, ours_mean + ours_std, color="#2ca02c", alpha=0.18)
+    for idx, _ in enumerate(SEEDS):
+        plt.scatter(np.array(SAMPLE_SIZES) * (1 + offsets[idx]), res_ours[:, idx], color="#2ca02c", alpha=0.4, s=40, label="_nolegend_")
+
+    plt.xscale("log")
+    plt.xlabel("Sample Size (N, log scale)")
     plt.ylabel("PEHE Error (Lower is Better)")
     plt.title(f"Scaling Analysis: Deep Learning vs Trees (Noise={FIXED_NOISE})")
     plt.legend()
-    plt.grid(True, alpha=0.3)
+    plt.grid(True, which="both", linestyle=":", alpha=0.5)
     output_path = "scaling_results.pdf"
+    plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     print(f"\nScaling benchmark complete. Results saved to {output_path}")
+
+    delta = res_ours - res_cf  # Negative means CTRL-DML beats Causal Forest
+    delta_mean = np.mean(delta, axis=1)
+    delta_std = np.std(delta, axis=1)
+
+    plt.figure(figsize=(9, 5.5))
+    plt.axhline(0, color="gray", linestyle=":", linewidth=1)
+    plt.plot(SAMPLE_SIZES, delta_mean, color="#9467bd", marker="o", linewidth=2, label="CTRL-DML minus Causal Forest")
+    plt.fill_between(SAMPLE_SIZES, delta_mean - delta_std, delta_mean + delta_std, color="#9467bd", alpha=0.15)
+    for idx, _ in enumerate(SEEDS):
+        plt.scatter(np.array(SAMPLE_SIZES) * (1 + offsets[idx]), delta[:, idx], color="#9467bd", alpha=0.5, s=45, label="_nolegend_")
+    plt.xscale("log")
+    plt.xlabel("Sample Size (N, log scale)")
+    plt.ylabel("PEHE Delta (negative favors CTRL-DML)")
+    plt.title("Gap vs. Causal Forest across sample sizes")
+    plt.legend()
+    plt.grid(True, which="both", linestyle=":", alpha=0.5)
+    delta_path = "scaling_delta.pdf"
+    plt.tight_layout()
+    plt.savefig(delta_path, dpi=300)
+    print(f"Delta view saved to {delta_path}")
 
 
 if __name__ == "__main__":

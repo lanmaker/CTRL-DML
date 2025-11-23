@@ -118,20 +118,27 @@ for i, n_noise in enumerate(noise_levels):
 d_mean, d_std = np.mean(res_dragon, axis=1), np.std(res_dragon, axis=1)
 c_mean, c_std = np.mean(res_cf, axis=1), np.std(res_cf, axis=1)
 o_mean, o_std = np.mean(res_ours, axis=1), np.std(res_ours, axis=1)
+offsets = np.linspace(-0.15, 0.15, len(seeds))
 
 plt.figure(figsize=(10, 6))
 
 # DragonNet (Red)
 plt.plot(noise_levels, d_mean, label='DragonNet (NN Baseline)', color='#d62728', linestyle='--', marker='x')
 plt.fill_between(noise_levels, d_mean - d_std, d_mean + d_std, color='#d62728', alpha=0.1)
+for idx, _ in enumerate(seeds):
+    plt.scatter(np.array(noise_levels) + offsets[idx], res_dragon[:, idx], color='#d62728', alpha=0.35, s=40, label='_nolegend_')
 
 # Causal Forest (Blue)
 plt.plot(noise_levels, c_mean, label='Causal Forest (Tree Baseline)', color='#1f77b4', linestyle='--', marker='^')
 plt.fill_between(noise_levels, c_mean - c_std, c_mean + c_std, color='#1f77b4', alpha=0.1)
+for idx, _ in enumerate(seeds):
+    plt.scatter(np.array(noise_levels) + offsets[idx], res_cf[:, idx], color='#1f77b4', alpha=0.35, s=40, label='_nolegend_')
 
 # CTRL-DML (Green)
 plt.plot(noise_levels, o_mean, label='CTRL-DML (Ours)', color='#2ca02c', linestyle='-', marker='s', linewidth=2.5)
 plt.fill_between(noise_levels, o_mean - o_std, o_mean + o_std, color='#2ca02c', alpha=0.2)
+for idx, _ in enumerate(seeds):
+    plt.scatter(np.array(noise_levels) + offsets[idx], res_ours[:, idx], color='#2ca02c', alpha=0.35, s=40, label='_nolegend_')
 
 plt.xlabel("Noise Dimensions")
 plt.ylabel("PEHE Error")
@@ -141,6 +148,26 @@ plt.grid(True, alpha=0.3)
 output_path = "benchmark_final.pdf"
 plt.savefig(output_path, dpi=300)
 print(f"\nResults saved to {output_path}")
+
+# Delta view: negative means CTRL-DML beats Causal Forest
+delta = res_ours - res_cf
+delta_mean = np.mean(delta, axis=1)
+delta_std = np.std(delta, axis=1)
+
+plt.figure(figsize=(8, 5))
+plt.axhline(0, color='gray', linestyle=':', linewidth=1)
+plt.plot(noise_levels, delta_mean, label='CTRL-DML minus Causal Forest', color='#9467bd', marker='o', linewidth=2)
+plt.fill_between(noise_levels, delta_mean - delta_std, delta_mean + delta_std, color='#9467bd', alpha=0.15)
+for idx, _ in enumerate(seeds):
+    plt.scatter(np.array(noise_levels) + offsets[idx], delta[:, idx], color='#9467bd', alpha=0.5, s=45, label='_nolegend_')
+plt.xlabel("Noise Dimensions")
+plt.ylabel("PEHE Delta (negative favors CTRL-DML)")
+plt.title("Gap vs. Causal Forest across Noise Levels")
+plt.legend()
+plt.grid(True, alpha=0.3)
+delta_path = "benchmark_final_delta.pdf"
+plt.savefig(delta_path, dpi=300)
+print(f"Delta view saved to {delta_path}")
 
 print("\nInterpretation guide:")
 print("- Noise=10: Causal Forest may lead thanks to strong nonlinear splits with low noise.")
