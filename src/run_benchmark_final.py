@@ -8,7 +8,7 @@ import os
 
 # === New challenger: EconML ===
 from econml.dml import CausalForestDML
-from sklearn.linear_model import LassoCV
+from sklearn.linear_model import LassoCV, LogisticRegressionCV
 
 # === Existing baselines ===
 from catenets.models.torch import DragonNet as StandardDragonNet
@@ -97,8 +97,8 @@ for i, n_noise in enumerate(noise_levels):
         res_dragon[i, j] = np.sqrt(np.mean((true_te - p_base)**2))
         
         # 2. Causal Forest (Blue) - The Strong Baseline
-        # Use LassoCV for the first-stage DML models and CausalForest for the second stage
-        est = CausalForestDML(model_y=LassoCV(), model_t=LassoCV(), 
+        # Use LassoCV for outcome and LogisticRegressionCV for treatment to avoid classifier warning
+        est = CausalForestDML(model_y=LassoCV(), model_t=LogisticRegressionCV(max_iter=1000), 
                               n_estimators=CF_TREES, discrete_treatment=True, random_state=seed)
         est.fit(y, T, X=X)
         p_cf = est.effect(X)
