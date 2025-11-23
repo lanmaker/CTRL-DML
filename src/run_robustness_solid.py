@@ -58,12 +58,12 @@ def train_ctrl_dml(X_np, y_np, T_np):
     T = torch.from_numpy(T_np).long().to(DEVICE) # Shape (N,)
     
     # Initialize Model
-    model = CTRLDML(n_unit_in=X.shape[1], n_iter=1, batch_size=256).to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    model = CTRLDML(n_unit_in=X.shape[1], n_iter=1, batch_size=256, dropout_prob=0.35).to(DEVICE)
+    optimizer = optim.Adam(model.parameters(), lr=0.005, weight_decay=1e-5)
     
     epochs = 800 
     batch_size = 256
-    lambda_sparsity = 0.05
+    lambda_sparsity = 0.072
     n_samples = X.shape[0]
     
     model.train()

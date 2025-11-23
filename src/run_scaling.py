@@ -19,7 +19,7 @@ SEEDS = [42, 1024]
 CTRL_EPOCHS = 600 if not FAST_RUN else 300
 BATCH_SIZE = 512
 CF_TREES = 100 if not FAST_RUN else 48
-LAMBDA_SPARSITY = 0.05
+LAMBDA_SPARSITY = 0.072
 
 
 def set_seed(seed: int) -> None:
@@ -48,8 +48,8 @@ def train_ctrl_dml(X_np, y_np, T_np):
     y = torch.from_numpy(y_np).float().to(DEVICE)
     T = torch.from_numpy(T_np).long().to(DEVICE)
 
-    model = CTRLDML(n_unit_in=X.shape[1], n_iter=1, batch_size=BATCH_SIZE).to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    model = CTRLDML(n_unit_in=X.shape[1], n_iter=1, batch_size=BATCH_SIZE, dropout_prob=0.35).to(DEVICE)
+    optimizer = optim.Adam(model.parameters(), lr=0.005, weight_decay=1e-5)
 
     model.train()
     for epoch in range(CTRL_EPOCHS):
