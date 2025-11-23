@@ -33,3 +33,7 @@ wheels/
 venv/
 env/
 ENV/
+
+# Generated Artifacts
+*.pdf
+*.npz
