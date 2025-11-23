@@ -29,11 +29,16 @@ class TabularAttention(nn.Module):
             nn.ELU() 
         )
         
-        self.relaxation = relaxation
+        # Store the latest mask penalty
+        self.current_mask_penalty = 0.0
 
     def forward(self, x):
         # Step A: Generate Mask
         mask = self.mask_net(x)
+        
+        # Calculate Sparsity Penalty (L1 Norm of the mask)
+        # We want this to be small (sparse)
+        self.current_mask_penalty = torch.mean(mask)
         
         # Step B: Apply Mask (Feature Selection)
         x_masked = x * mask
