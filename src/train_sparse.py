@@ -124,5 +124,29 @@ def train_sparse():
     print(f"Noise (Gray)        Avg Weight: {avg_n:.4f}")
     print("-" * 30)
 
+    # === Ablation Study: Calculate PEHE ===
+    model.eval()
+    with torch.no_grad():
+        # 1. Get Test Data (using the same X since we are doing a simple benchmark on the whole dataset)
+        # In a real scenario, we should use a hold-out test set, but for this benchmark we use the generated stress data
+        X_test_tensor = X # Already on DEVICE
+        true_te = data['true_te']
+        
+        # 2. Predict
+        # model.predict returns CATE (y1 - y0) directly as a tensor
+        cate_pred_tensor = model.predict(X_test_tensor)
+        cate_pred = cate_pred_tensor.cpu().numpy().flatten()
+        
+        # 3. Calculate PEHE
+        pehe_sparse = np.sqrt(np.mean((true_te - cate_pred)**2))
+        
+        # 3. Calculate PEHE
+        pehe_sparse = np.sqrt(np.mean((true_te - cate_pred.flatten())**2))
+
+    print("="*40)
+    print(f"Ablation Study C (Full Method) Results:")
+    print(f"CTRL-DML (lambda={LAMBDA_SPARSITY}) PEHE: {pehe_sparse:.4f}")
+    print("="*40)
+
 if __name__ == "__main__":
     train_sparse()
