@@ -99,15 +99,85 @@ class MyDragonNet(BasicDragonNet):
         # Here we replace it with a sequence: TabularAttention -> Linear -> ELU
         # This matches the "200 -> 200" structure but with attention first.
         
+        # === SURGERY START ===
+        # Replace the standard RepresentationNet with TabularAttention
+        # The original self._repr_estimator is created in BasicDragonNet.__init__
+        # We overwrite it here.
+        
+        # Note: RepresentationNet usually has multiple layers. 
+        # Here we replace it with a sequence: TabularAttention -> Linear -> ELU
+        # This matches the "200 -> 200" structure but with attention first.
+        
         self._repr_estimator = nn.Sequential(
             # Layer 1: Attention Mechanism
             TabularAttention(n_unit_in, n_units_r),
+            nn.Dropout(p=dropout_prob), # <--- Added Dropout
             # Layer 2: Standard Non-linear transformation (to match depth)
             nn.Linear(n_units_r, n_units_r),
-            nn.ELU()
+            nn.ELU(),
+            nn.Dropout(p=dropout_prob)  # <--- Added Dropout
         ).to(DEVICE)
         
+        # Modify outcome heads (y0_net, y1_net) to include Dropout
+        # We overwrite self._po_estimators from BasicDragonNet
+        self._po_estimators = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(n_units_r, 100),
+                nn.ELU(),
+                nn.Dropout(p=dropout_prob), # <--- Added Dropout
+                nn.Linear(100, 1)
+            ).to(DEVICE),
+            nn.Sequential(
+                nn.Linear(n_units_r, 100),
+                nn.ELU(),
+                nn.Dropout(p=dropout_prob), # <--- Added Dropout
+                nn.Linear(100, 1)
+            ).to(DEVICE)
+        ])
+        
         # === SURGERY END ===
+
+    def predict_with_uncertainty(self, X, n_runs=50):
+        """
+        MC Dropout for Uncertainty Quantification
+        X: Input data (numpy array or tensor)
+        n_runs: Number of forward passes
+        """
+        # 1. Force train mode to enable Dropout
+        self.train() 
+        
+        # Handle input
+        if isinstance(X, np.ndarray):
+            X = torch.from_numpy(X).float().to(DEVICE)
+        
+        # 2. Multiple forward passes
+        preds_cate = []
+        
+        with torch.no_grad(): # No gradients needed for inference
+            for _ in range(n_runs):
+                # Manual forward pass through our components
+                repr_preds = self._repr_estimator(X).squeeze()
+                y0_preds = self._po_estimators[0](repr_preds).squeeze()
+                y1_preds = self._po_estimators[1](repr_preds).squeeze()
+                
+                # Calculate CATE = y1 - y0
+                cate = y1_preds - y0_preds
+                preds_cate.append(cate.cpu().numpy())
+        
+        # 3. Restore eval mode
+        self.eval()
+        
+        # 4. Statistical analysis
+        preds_cate = np.array(preds_cate) # shape: (n_runs, n_samples)
+        
+        mean_cate = preds_cate.mean(axis=0) # Mean CATE
+        std_cate = preds_cate.std(axis=0)   # Uncertainty (Std Dev)
+        
+        # 95% Confidence Interval: Mean ± 1.96 * Std
+        lower_bound = mean_cate - 1.96 * std_cate
+        upper_bound = mean_cate + 1.96 * std_cate
+        
+        return mean_cate, std_cate, lower_bound, upper_bound
 
     def _step(
         self, X: torch.Tensor, w: torch.Tensor
