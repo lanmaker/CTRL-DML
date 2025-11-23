@@ -79,6 +79,7 @@ colors = ['#1f77b4', '#2ca02c']
 plt.bar(models, scores, color=colors, alpha=0.8)
 plt.ylabel("PEHE Error (Lower is Better)")
 plt.title("Performance on Text-Confounded Data")
+plt.ylim(0, max(scores) * 1.2) # Add headroom for text labels
 for i, v in enumerate(scores):
     plt.text(i, v + 0.05, f"{v:.2f}", ha='center', fontweight='bold')
 
