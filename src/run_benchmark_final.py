@@ -79,7 +79,7 @@ res_dragon = np.zeros((len(noise_levels), len(seeds)))
 res_cf = np.zeros((len(noise_levels), len(seeds))) # Added: Causal Forest
 res_ours = np.zeros((len(noise_levels), len(seeds)))
 
-print("Starting final showdown: DragonNet vs CausalForest vs CTRL-DML")
+print("Starting final benchmark: DragonNet vs CausalForest vs CTRL-DML")
 if FAST_RUN:
     print("Fast mode enabled (CTRL_DML_FAST=1): fewer epochs/trees, smaller sample size, and fewer seeds for quicker verification.")
 
@@ -135,7 +135,7 @@ plt.fill_between(noise_levels, o_mean - o_std, o_mean + o_std, color='#2ca02c', 
 
 plt.xlabel("Noise Dimensions")
 plt.ylabel("PEHE Error")
-plt.title("Final Benchmark: Can we beat the Forest?")
+plt.title("Final Benchmark: Performance Comparison")
 plt.legend()
 plt.grid(True, alpha=0.3)
 output_path = "benchmark_final.pdf"

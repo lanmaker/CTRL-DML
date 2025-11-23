@@ -115,7 +115,7 @@ def main():
 
     plt.xlabel("Sample Size (N)")
     plt.ylabel("PEHE Error (Lower is Better)")
-    plt.title(f"Scaling Law: Can Deep Learning Overtake Trees? (Noise={FIXED_NOISE})")
+    plt.title(f"Scaling Analysis: Deep Learning vs Trees (Noise={FIXED_NOISE})")
     plt.legend()
     plt.grid(True, alpha=0.3)
     output_path = "scaling_results.pdf"

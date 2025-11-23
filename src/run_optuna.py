@@ -108,14 +108,14 @@ def objective(trial):
 
 # === 3. Start Search ===
 if __name__ == "__main__":
-    print("🚀 Starting Hyperparameter Tuning with Optuna...")
+    print("Starting Hyperparameter Tuning with Optuna...")
     # Create Study, minimize Loss
     study = optuna.create_study(direction="minimize")
     
     # Run 5 trials for demonstration (increase to 50+ for real tuning)
     study.optimize(objective, n_trials=5)
 
-    print("\n✅ Tuning Complete!")
+    print("\nTuning Complete!")
     print("Best Trial:")
     print(f"  Value (Val Loss): {study.best_trial.value:.4f}")
     print("  Params:")
