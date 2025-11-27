@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from sklearn.feature_extraction.text import CountVectorizer
 
-def get_multimodal_data(n=3000, vocab_size=1000):
+def get_multimodal_data(n=3000, vocab_size=1000, p_noise: float = 0.0):
     """
     Generate data with 'Latent Text Confounder'.
     Scenario:
@@ -34,6 +34,10 @@ def get_multimodal_data(n=3000, vocab_size=1000):
             doc[0] = 1 # Force "Severe"
         else:
             doc[0] = 2 # Force "Mild"
+
+        # With probability p_noise, mask the confounding word with a neutral token
+        if np.random.rand() < p_noise:
+            doc[0] = 0
             
         texts.append(doc) # Keep as indices for Embedding
         has_severe.append(is_severe)
