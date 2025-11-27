@@ -36,7 +36,17 @@ def aggregate(rows):
     return variants, np.array(dml_mean), np.array(dml_std), np.array(plug_mean), np.array(plug_std)
 
 
+def ordered_indices(variants):
+    order = ["no_gating", "gating_no_L1", "gating_L1"]
+    idx = [i for i, v in enumerate(order) if v in variants]
+    return idx if idx else list(range(len(variants)))
+
+
 def plot_ablation(variants, dml_mean, dml_std, plug_mean, plug_std, out_path="ablation_plot.pdf"):
+    idx = ordered_indices(variants)
+    variants = [variants[i] for i in idx]
+    dml_mean, dml_std = dml_mean[idx], dml_std[idx]
+    plug_mean, plug_std = plug_mean[idx], plug_std[idx]
     x = np.arange(len(variants))
     width = 0.35
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -53,7 +63,50 @@ def plot_ablation(variants, dml_mean, dml_std, plug_mean, plug_std, out_path="ab
     print(f"Saved plot to {out_path}")
 
 
+def plot_dml_only(variants, dml_mean, dml_std, out_path="ablation_dml_variants.pdf"):
+    idx = ordered_indices(variants)
+    variants = [variants[i] for i in idx]
+    dml_mean, dml_std = dml_mean[idx], dml_std[idx]
+    x = np.arange(len(variants))
+    width = 0.5
+    fig, ax = plt.subplots(figsize=(6.5, 4))
+    ax.bar(x, dml_mean, width, yerr=dml_std, color="#9467bd", alpha=0.85, capsize=4)
+    ax.set_ylabel("PEHE (DML)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(variants, rotation=15)
+    ax.set_title("DML-only: effect of gating")
+    ax.grid(True, axis="y", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    print(f"Saved plot to {out_path}")
+
+
+def plot_dml_vs_plugin_for_variant(
+    variants, dml_mean, dml_std, plug_mean, plug_std, target_variant="gating_L1", out_path="ablation_dml_vs_plugin.pdf"
+):
+    if target_variant not in variants:
+        target_variant = variants[0]
+    idx = variants.index(target_variant)
+    bars = ["DML", "Plug-in"]
+    means = [dml_mean[idx], plug_mean[idx]]
+    stds = [dml_std[idx], plug_std[idx]]
+    x = np.arange(len(bars))
+    width = 0.5
+    fig, ax = plt.subplots(figsize=(5.5, 4))
+    ax.bar(x, means, width, yerr=stds, color=["#9467bd", "#1f77b4"], alpha=0.85, capsize=4)
+    ax.set_xticks(x)
+    ax.set_xticklabels(bars)
+    ax.set_ylabel(f"PEHE ({target_variant})")
+    ax.set_title(f"DML vs Plug-in for {target_variant}")
+    ax.grid(True, axis="y", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    print(f"Saved plot to {out_path}")
+
+
 if __name__ == "__main__":
     rows = load_results()
     variants, dml_mean, dml_std, plug_mean, plug_std = aggregate(rows)
     plot_ablation(variants, dml_mean, dml_std, plug_mean, plug_std)
+    plot_dml_only(variants, dml_mean, dml_std)
+    plot_dml_vs_plugin_for_variant(variants, dml_mean, dml_std, plug_mean, plug_std, target_variant="gating_L1")

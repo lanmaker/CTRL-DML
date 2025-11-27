@@ -425,6 +425,7 @@ def run_ablation(
 
     variants: List[Variant] = [
         Variant("no_gating", False, 0.0),
+        Variant("gating_no_L1", True, 0.0),
         Variant("gating_L1", True, 0.05),
     ]
     rows = []
