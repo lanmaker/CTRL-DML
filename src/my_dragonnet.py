@@ -35,6 +35,8 @@ class TabularAttention(nn.Module):
     def forward(self, x):
         # Step A: Generate Mask
         mask = self.mask_net(x)
+        # Cache the latest mask for interpretability
+        self.last_mask = mask.detach()
         
         # Calculate Sparsity Penalty (L1 Norm of the mask)
         # We want this to be small (sparse)
