@@ -37,6 +37,7 @@ ENV/
 # Generated Artifacts
 *.pdf
 *.npz
+ctrl_plugin_*.pt
 
 # Paper drafts (keep LaTeX out of git)
 /CTRL-DML-Paper/

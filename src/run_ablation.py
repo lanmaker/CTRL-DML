@@ -16,11 +16,12 @@ from catenets.models.torch.base import DEVICE
 
 FAST_RUN = os.environ.get("CTRL_DML_FAST", "0") == "1"
 N_SAMPLES = 1200 if FAST_RUN else 2000
-EPOCHS_NUISANCE = 100 if FAST_RUN else 150
-EPOCHS_TAU = 150 if FAST_RUN else 250
+EPOCHS_PLUGIN = 100 if FAST_RUN else 220
+EPOCHS_NUISANCE = 90 if FAST_RUN else 150
+EPOCHS_TAU = 180 if FAST_RUN else 300
 BATCH_SIZE = 160 if FAST_RUN else 192
 HIDDEN_DIM = 96 if FAST_RUN else 120
-HIDDEN_TAU = 64 if FAST_RUN else 72
+HIDDEN_TAU = 64 if FAST_RUN else 96
 LAMBDA_TAU = 5e-4
 
 
@@ -133,6 +134,43 @@ class TarNet(nn.Module):
         return self.backbone.mask_penalty
 
 
+def train_plugin(
+    X: np.ndarray,
+    y: np.ndarray,
+    T: np.ndarray,
+    use_gating: bool,
+    lambda_sparsity: float,
+    seed: int,
+    dropout_p: float,
+    hidden_dim: int,
+    batch_size: int,
+    epochs: int,
+    lr: float = 0.003,
+) -> TarNet:
+    """Stage 0: fit plug-in TARNet to warm-start tau."""
+    set_seed(seed)
+    model = TarNet(X.shape[1], hidden_dim, dropout_p, use_gating).to(DEVICE)
+    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    x_t = torch.from_numpy(X).float().to(DEVICE)
+    y_t = torch.from_numpy(y).float().to(DEVICE)
+    t_t = torch.from_numpy(T).float().to(DEVICE)
+
+    model.train()
+    for _ in range(epochs):
+        perm = torch.randperm(x_t.shape[0])
+        for i in range(0, x_t.shape[0], batch_size):
+            idx = perm[i : i + batch_size]
+            bx, by, bt = x_t[idx], y_t[idx], t_t[idx]
+            opt.zero_grad()
+            y0_pred, y1_pred = model(bx)
+            y_pred = bt * y1_pred + (1 - bt) * y0_pred
+            loss_y = torch.mean((y_pred.squeeze() - by) ** 2)
+            loss = loss_y + lambda_sparsity * model.mask_penalty
+            loss.backward()
+            opt.step()
+    return model
+
+
 def train_nuisance(
     X: np.ndarray,
     y: np.ndarray,
@@ -214,10 +252,30 @@ def cross_fit_nuisance(
     return m_hat, e_hat
 
 
+def stabilize_residuals(
+    R: np.ndarray, W: np.ndarray, clip_w: float = 0.05, z_clip: float = 10.0
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Return pseudo-outcome Z and weights s for the ratio R-learner."""
+    R_mean, R_std = float(np.mean(R)), float(np.std(R))
+    W_std = float(np.std(W))
+    R_std = R_std + 1e-8
+    W_std = W_std + 1e-8
+
+    R_stdzd = (R - R_mean) / R_std
+    W_stdzd = W / W_std
+    W_clip = np.clip(W_stdzd, -clip_w, clip_w)
+    W_safe = np.sign(W_clip) * np.maximum(np.abs(W_clip), 1e-3)
+    Z = R_stdzd / W_safe
+    Z = np.clip(Z, -z_clip, z_clip)
+    s = np.minimum(W_safe ** 2, clip_w ** 2)
+    s = s / (np.mean(s) + 1e-8)
+    return Z.astype(np.float32), s.astype(np.float32)
+
+
 def train_rlearner(
     X: np.ndarray,
-    R: np.ndarray,
-    W: np.ndarray,
+    Z: np.ndarray,
+    weights: np.ndarray,
     use_gating: bool,
     lambda_tau: float,
     seed: int,
@@ -225,50 +283,52 @@ def train_rlearner(
     hidden_dim: int = HIDDEN_TAU,
     batch_size: int = BATCH_SIZE,
     epochs: int = EPOCHS_TAU,
-    lr: float = 0.003,
-    standardize_w: bool = False,
+    lr: float = 3e-4,
     grad_clip: float = 0.0,
-    normalize_by_abs_w: bool = False,
-    weight_by_w2: bool = True,
-    clip_w: float = 0.05,
-    use_ratio_loss: bool = True,
+    warm_start_from: TarNet | None = None,
+    teacher_tau: np.ndarray | None = None,
+    aux_beta_start: float = 0.1,
+    aux_beta_end: float = 0.0,
+    aux_decay_epochs: int = 50,
 ) -> TauNet:
     set_seed(seed)
     model = TauNet(X.shape[1], hidden_dim, dropout_p, use_gating).to(DEVICE)
+    if warm_start_from is not None:
+        # Copy backbone weights and initialize tau head with y1 - y0 to warm-start CATE.
+        model.backbone.load_state_dict(warm_start_from.backbone.state_dict())
+        with torch.no_grad():
+            model.head.weight.copy_(warm_start_from.y1.weight - warm_start_from.y0.weight)
+            model.head.bias.copy_(warm_start_from.y1.bias - warm_start_from.y0.bias)
+
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     x_t = torch.from_numpy(X).float().to(DEVICE)
-    r_np, w_np = R.copy(), W.copy()
-    if standardize_w:
-        r_np = (r_np - np.mean(r_np)) / (np.std(r_np) + 1e-6)
-        w_np = w_np / (np.std(w_np) + 1e-6)
-    r_t = torch.from_numpy(r_np).float().to(DEVICE)
-    w_t = torch.from_numpy(w_np).float().to(DEVICE)
+    z_t = torch.from_numpy(Z).float().to(DEVICE)
+    w_t = torch.from_numpy(np.maximum(weights, 1e-6)).float().to(DEVICE)
+    teacher_t = torch.from_numpy(teacher_tau).float().to(DEVICE) if teacher_tau is not None else None
+
+    def beta_for_epoch(epoch: int) -> float:
+        if aux_decay_epochs <= 0:
+            return aux_beta_end
+        if epoch >= aux_decay_epochs:
+            return aux_beta_end
+        frac = 1 - epoch / aux_decay_epochs
+        return aux_beta_end + frac * (aux_beta_start - aux_beta_end)
 
     model.train()
-    for _ in range(epochs):
+    for epoch in range(epochs):
         perm = torch.randperm(x_t.shape[0])
         for i in range(0, x_t.shape[0], batch_size):
             idx = perm[i : i + batch_size]
-            bx, br, bw = x_t[idx], r_t[idx], w_t[idx]
+            bx, bz, bw = x_t[idx], z_t[idx], w_t[idx]
             opt.zero_grad()
             tau_pred = model(bx)
-            if use_ratio_loss:
-                bw_clipped = torch.clamp(bw, min=-clip_w, max=clip_w) if clip_w > 0 else bw
-                bw_safe = torch.sign(bw_clipped) * torch.maximum(torch.abs(bw_clipped), torch.tensor(1e-3, device=DEVICE))
-                z = br / bw_safe
-                weights = bw_safe ** 2
-                loss_orth = torch.mean(weights * (z - tau_pred) ** 2)
-            else:
-                resid = br - bw * tau_pred
-                if normalize_by_abs_w:
-                    denom = torch.mean(torch.clamp(torch.abs(bw), min=1e-3))
-                    resid = resid / denom
-                if weight_by_w2:
-                    weight = torch.clamp(bw ** 2, min=1e-3)
-                    loss_orth = torch.mean(weight * resid ** 2)
-                else:
-                    loss_orth = torch.mean(resid ** 2)
-            loss = loss_orth + lambda_tau * model.mask_penalty
+            loss_dml = torch.mean(bw * (tau_pred - bz) ** 2)
+            loss = loss_dml + lambda_tau * model.mask_penalty
+            beta = beta_for_epoch(epoch)
+            if teacher_t is not None and beta > 0:
+                teacher_pred = teacher_t[idx]
+                aux_loss = torch.mean((tau_pred - teacher_pred) ** 2)
+                loss = loss + beta * aux_loss
             loss.backward()
             if grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
@@ -338,6 +398,7 @@ def run_ablation(
     n_samples: int,
     n_noise: int,
     k_folds: int,
+    plugin_epochs: int,
     epochs_nuisance: int,
     epochs_tau: int,
     batch_size: int,
@@ -348,10 +409,13 @@ def run_ablation(
     standardize_w: bool,
     lr: float,
     grad_clip: float,
-    normalize_by_abs_w: bool,
-    weight_by_w2: bool,
     clip_w: float,
-    use_ratio_loss: bool,
+    z_clip: float,
+    aux_beta_start: float,
+    aux_beta_end: float,
+    aux_decay_epochs: int,
+    plugin_lr: float,
+    save_plugin: bool,
 ):
     @dataclass
     class Variant:
@@ -370,7 +434,27 @@ def run_ablation(
             print(f"\n>>> Variant={variant.name}, seed={seed}")
             X, T, y, true_te = get_stress_data(n_samples=n_samples, n_noise=n_noise, seed=seed)
 
-            # Stage 1: Cross-fit nuisances
+            # Stage 0: plug-in pretrain (used for baseline + warm-start)
+            plugin_model = train_plugin(
+                X,
+                y,
+                T,
+                variant.use_gating,
+                variant.lambda_sparsity,
+                seed=seed,
+                dropout_p=dropout_p,
+                hidden_dim=hidden_tau,
+                batch_size=batch_size,
+                epochs=plugin_epochs,
+                lr=plugin_lr,
+            )
+            tau_plugin = predict_tau_tarnet(plugin_model, X)
+            if save_plugin:
+                ckpt_path = f"ctrl_plugin_{variant.name}_seed{seed}.pt"
+                torch.save(plugin_model.state_dict(), ckpt_path)
+                print(f"Saved plug-in checkpoint to {ckpt_path}")
+
+            # Stage 1: Cross-fit nuisances (freshly initialized)
             m_hat, e_hat = cross_fit_nuisance(
                 X,
                 y,
@@ -384,14 +468,19 @@ def run_ablation(
                 batch_size=batch_size,
                 epochs=epochs_nuisance,
             )
+            e_hat = np.clip(e_hat, 0.01, 0.99)
             R = y - m_hat
             W = T - e_hat
+            if standardize_w:
+                Z, weights = stabilize_residuals(R, W, clip_w=clip_w, z_clip=z_clip)
+            else:
+                Z, weights = R, np.clip(W, -clip_w, clip_w) ** 2
 
             # Stage 2a: Orthogonal R-learner
             tau_model = train_rlearner(
                 X,
-                R,
-                W,
+                Z,
+                weights,
                 variant.use_gating,
                 lambda_tau,
                 seed=seed,
@@ -399,32 +488,18 @@ def run_ablation(
                 hidden_dim=hidden_tau,
                 batch_size=batch_size,
                 epochs=epochs_tau,
-                standardize_w=standardize_w,
                 lr=lr,
                 grad_clip=grad_clip,
-                normalize_by_abs_w=normalize_by_abs_w,
-                weight_by_w2=weight_by_w2,
-                clip_w=clip_w,
-                use_ratio_loss=use_ratio_loss,
+                warm_start_from=plugin_model,
+                teacher_tau=tau_plugin,
+                aux_beta_start=aux_beta_start,
+                aux_beta_end=aux_beta_end,
+                aux_decay_epochs=aux_decay_epochs,
             )
             tau_pred = predict_tau_rlearner(tau_model, X)
             pehe_orth = evaluate_pehe(tau_pred, true_te)
 
-            # Stage 2b: Plug-in TARNet baseline
-            tar_model = train_tarnet(
-                X,
-                y,
-                T,
-                variant.use_gating,
-                variant.lambda_sparsity,
-                seed=seed,
-                dropout_p=dropout_p,
-                hidden_dim=hidden_dim,
-                batch_size=batch_size,
-                epochs=epochs_tau,
-                lr=lr,
-            )
-            tau_plugin = predict_tau_tarnet(tar_model, X)
+            # Stage 2b: Plug-in TARNet baseline (from Stage 0 checkpoint)
             pehe_plugin = evaluate_pehe(tau_plugin, true_te)
 
             print(f"PEHE | DML Orthogonal: {pehe_orth:.3f} | Plug-in (no DML): {pehe_plugin:.3f}")
@@ -471,6 +546,7 @@ def parse_args():
     parser.add_argument("--n-samples", type=int, default=N_SAMPLES, help="Number of samples.")
     parser.add_argument("--n-noise", type=int, default=50, help="Number of noise dimensions.")
     parser.add_argument("--k-folds", type=int, default=3, help="Cross-fitting folds.")
+    parser.add_argument("--plugin-epochs", type=int, default=EPOCHS_PLUGIN, help="Epochs for plug-in pretraining.")
     parser.add_argument("--epochs-nuisance", type=int, default=EPOCHS_NUISANCE, help="Epochs for nuisance training.")
     parser.add_argument("--epochs-tau", type=int, default=EPOCHS_TAU, help="Epochs for tau head training.")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size.")
@@ -491,18 +567,9 @@ def parse_args():
         action="store_false",
         help="Disable residual standardization.",
     )
-    parser.add_argument("--lr", type=float, default=0.003, help="Learning rate for both stages.")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate for tau fine-tuning.")
+    parser.add_argument("--plugin-lr", type=float, default=0.003, help="Learning rate for plug-in pretraining.")
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient clipping norm (0 to disable).")
-    parser.add_argument(
-        "--normalize-by-abs-w",
-        action="store_true",
-        help="Divide orthogonal residual by mean |W| to stabilize loss scale.",
-    )
-    parser.add_argument(
-        "--no-weight-by-w2",
-        action="store_true",
-        help="Disable weighting orthogonal loss by W^2 (overlap-aware by default).",
-    )
     parser.add_argument(
         "--clip-w",
         type=float,
@@ -510,9 +577,33 @@ def parse_args():
         help="Clip orthogonal residual weights to [-clip_w, clip_w] before ratio loss.",
     )
     parser.add_argument(
-        "--no-ratio-loss",
+        "--z-clip",
+        type=float,
+        default=10.0,
+        help="Clip pseudo-outcomes Z to stabilize the ratio target.",
+    )
+    parser.add_argument(
+        "--aux-beta-start",
+        type=float,
+        default=0.1,
+        help="Initial weight on plug-in auxiliary loss.",
+    )
+    parser.add_argument(
+        "--aux-beta-end",
+        type=float,
+        default=0.0,
+        help="Final weight on plug-in auxiliary loss after decay.",
+    )
+    parser.add_argument(
+        "--aux-decay-epochs",
+        type=int,
+        default=50,
+        help="Epochs over which to decay the auxiliary loss weight.",
+    )
+    parser.add_argument(
+        "--no-save-plugin",
         action="store_true",
-        help="Use residual form br - bw * tau_pred instead of the stabilized ratio loss.",
+        help="Skip saving plug-in checkpoints.",
     )
     return parser.parse_args()
 
@@ -525,6 +616,7 @@ if __name__ == "__main__":
         n_samples=args.n_samples,
         n_noise=args.n_noise,
         k_folds=args.k_folds,
+        plugin_epochs=args.plugin_epochs,
         epochs_nuisance=args.epochs_nuisance,
         epochs_tau=args.epochs_tau,
         batch_size=args.batch_size,
@@ -535,8 +627,11 @@ if __name__ == "__main__":
         standardize_w=args.standardize_w,
         lr=args.lr,
         grad_clip=args.grad_clip,
-        normalize_by_abs_w=args.normalize_by_abs_w,
-        weight_by_w2=not args.no_weight_by_w2,
         clip_w=args.clip_w,
-        use_ratio_loss=not args.no_ratio_loss,
+        z_clip=args.z_clip,
+        aux_beta_start=args.aux_beta_start,
+        aux_beta_end=args.aux_beta_end,
+        aux_decay_epochs=args.aux_decay_epochs,
+        plugin_lr=args.plugin_lr,
+        save_plugin=not args.no_save_plugin,
     )
