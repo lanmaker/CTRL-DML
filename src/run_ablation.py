@@ -16,12 +16,12 @@ from catenets.models.torch.base import DEVICE
 
 FAST_RUN = os.environ.get("CTRL_DML_FAST", "0") == "1"
 N_SAMPLES = 1200 if FAST_RUN else 2000
-EPOCHS_NUISANCE = 120 if FAST_RUN else 300
-EPOCHS_TAU = 120 if FAST_RUN else 300
-BATCH_SIZE = 192 if FAST_RUN else 256
-HIDDEN_DIM = 120 if FAST_RUN else 200
-HIDDEN_TAU = 80 if FAST_RUN else 128
-LAMBDA_TAU = 0.01
+EPOCHS_NUISANCE = 100 if FAST_RUN else 150
+EPOCHS_TAU = 150 if FAST_RUN else 250
+BATCH_SIZE = 160 if FAST_RUN else 192
+HIDDEN_DIM = 96 if FAST_RUN else 120
+HIDDEN_TAU = 64 if FAST_RUN else 72
+LAMBDA_TAU = 5e-4
 
 
 def set_seed(seed: int) -> None:
@@ -176,7 +176,7 @@ def cross_fit_nuisance(
     use_gating: bool,
     lambda_sparsity: float,
     seed: int = 42,
-    k_folds: int = 5,
+    k_folds: int = 3,
     dropout_p: float = 0.35,
     hidden_dim: int = HIDDEN_DIM,
     batch_size: int = BATCH_SIZE,
@@ -230,6 +230,8 @@ def train_rlearner(
     grad_clip: float = 0.0,
     normalize_by_abs_w: bool = False,
     weight_by_w2: bool = True,
+    clip_w: float = 0.05,
+    use_ratio_loss: bool = True,
 ) -> TauNet:
     set_seed(seed)
     model = TauNet(X.shape[1], hidden_dim, dropout_p, use_gating).to(DEVICE)
@@ -250,15 +252,22 @@ def train_rlearner(
             bx, br, bw = x_t[idx], r_t[idx], w_t[idx]
             opt.zero_grad()
             tau_pred = model(bx)
-            resid = br - bw * tau_pred
-            if normalize_by_abs_w:
-                denom = torch.mean(torch.clamp(torch.abs(bw), min=1e-3))
-                resid = resid / denom
-            if weight_by_w2:
-                weight = torch.clamp(bw ** 2, min=1e-3)
-                loss_orth = torch.mean(weight * resid ** 2)
+            if use_ratio_loss:
+                bw_clipped = torch.clamp(bw, min=-clip_w, max=clip_w) if clip_w > 0 else bw
+                bw_safe = torch.sign(bw_clipped) * torch.maximum(torch.abs(bw_clipped), torch.tensor(1e-3, device=DEVICE))
+                z = br / bw_safe
+                weights = bw_safe ** 2
+                loss_orth = torch.mean(weights * (z - tau_pred) ** 2)
             else:
-                loss_orth = torch.mean(resid ** 2)
+                resid = br - bw * tau_pred
+                if normalize_by_abs_w:
+                    denom = torch.mean(torch.clamp(torch.abs(bw), min=1e-3))
+                    resid = resid / denom
+                if weight_by_w2:
+                    weight = torch.clamp(bw ** 2, min=1e-3)
+                    loss_orth = torch.mean(weight * resid ** 2)
+                else:
+                    loss_orth = torch.mean(resid ** 2)
             loss = loss_orth + lambda_tau * model.mask_penalty
             loss.backward()
             if grad_clip > 0:
@@ -341,6 +350,8 @@ def run_ablation(
     grad_clip: float,
     normalize_by_abs_w: bool,
     weight_by_w2: bool,
+    clip_w: float,
+    use_ratio_loss: bool,
 ):
     @dataclass
     class Variant:
@@ -350,7 +361,6 @@ def run_ablation(
 
     variants: List[Variant] = [
         Variant("no_gating", False, 0.0),
-        Variant("gating_no_L1", True, 0.0),
         Variant("gating_L1", True, 0.05),
     ]
     rows = []
@@ -394,6 +404,8 @@ def run_ablation(
                 grad_clip=grad_clip,
                 normalize_by_abs_w=normalize_by_abs_w,
                 weight_by_w2=weight_by_w2,
+                clip_w=clip_w,
+                use_ratio_loss=use_ratio_loss,
             )
             tau_pred = predict_tau_rlearner(tau_model, X)
             pehe_orth = evaluate_pehe(tau_pred, true_te)
@@ -458,17 +470,29 @@ def parse_args():
     parser.add_argument("--seeds", type=int, nargs="+", default=default_seeds, help="Random seeds.")
     parser.add_argument("--n-samples", type=int, default=N_SAMPLES, help="Number of samples.")
     parser.add_argument("--n-noise", type=int, default=50, help="Number of noise dimensions.")
-    parser.add_argument("--k-folds", type=int, default=5, help="Cross-fitting folds.")
+    parser.add_argument("--k-folds", type=int, default=3, help="Cross-fitting folds.")
     parser.add_argument("--epochs-nuisance", type=int, default=EPOCHS_NUISANCE, help="Epochs for nuisance training.")
     parser.add_argument("--epochs-tau", type=int, default=EPOCHS_TAU, help="Epochs for tau head training.")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size.")
     parser.add_argument("--hidden", type=int, default=HIDDEN_DIM, help="Hidden width for nuisances.")
     parser.add_argument("--hidden-tau", type=int, default=HIDDEN_TAU, help="Hidden width for tau network.")
-    parser.add_argument("--dropout", type=float, default=0.35, help="Dropout probability.")
+    parser.add_argument("--dropout", type=float, default=0.4, help="Dropout probability.")
     parser.add_argument("--lambda-tau", type=float, default=LAMBDA_TAU, help="L1 weight on tau head mask.")
-    parser.add_argument("--standardize-w", action="store_true", help="Standardize W and R residuals before orthogonal loss.")
+    parser.add_argument(
+        "--standardize-w",
+        dest="standardize_w",
+        action="store_true",
+        default=True,
+        help="Standardize W and R residuals before orthogonal loss.",
+    )
+    parser.add_argument(
+        "--no-standardize-w",
+        dest="standardize_w",
+        action="store_false",
+        help="Disable residual standardization.",
+    )
     parser.add_argument("--lr", type=float, default=0.003, help="Learning rate for both stages.")
-    parser.add_argument("--grad-clip", type=float, default=0.0, help="Gradient clipping norm (0 to disable).")
+    parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient clipping norm (0 to disable).")
     parser.add_argument(
         "--normalize-by-abs-w",
         action="store_true",
@@ -478,6 +502,17 @@ def parse_args():
         "--no-weight-by-w2",
         action="store_true",
         help="Disable weighting orthogonal loss by W^2 (overlap-aware by default).",
+    )
+    parser.add_argument(
+        "--clip-w",
+        type=float,
+        default=0.05,
+        help="Clip orthogonal residual weights to [-clip_w, clip_w] before ratio loss.",
+    )
+    parser.add_argument(
+        "--no-ratio-loss",
+        action="store_true",
+        help="Use residual form br - bw * tau_pred instead of the stabilized ratio loss.",
     )
     return parser.parse_args()
 
@@ -502,4 +537,6 @@ if __name__ == "__main__":
         grad_clip=args.grad_clip,
         normalize_by_abs_w=args.normalize_by_abs_w,
         weight_by_w2=not args.no_weight_by_w2,
+        clip_w=args.clip_w,
+        use_ratio_loss=not args.no_ratio_loss,
     )

@@ -10,6 +10,12 @@ from sklearn.linear_model import LassoCV, LogisticRegressionCV
 from data_multimodal import get_multimodal_data, convert_text_to_tfidf
 from model_multimodal import MultimodalCTRL
 
+# Reproducibility
+np.random.seed(42)
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+
 # 1. Prepare Data
 print("Generating Multimodal Data (Clinical Notes Simulation)...")
 n_samples = 3000
