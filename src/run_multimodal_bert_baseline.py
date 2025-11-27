@@ -46,9 +46,19 @@ def to_text_strings(X_text: np.ndarray) -> list[str]:
     return [" ".join([vocab.get(int(t), f"noise{int(t)}") for t in row]) for row in X_text]
 
 
-def compute_bert_embeddings(texts, model_name: str, device: torch.device, max_length: int = 32):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).to(device)
+def compute_bert_embeddings(
+    texts,
+    model_name: str,
+    device: torch.device,
+    max_length: int = 32,
+    tokenizer: AutoTokenizer | None = None,
+    model: AutoModel | None = None,
+):
+    """Compute CLS embeddings with an optional preloaded model/tokenizer to avoid re-downloads."""
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if model is None:
+        model = AutoModel.from_pretrained(model_name).to(device)
     model.eval()
     with torch.no_grad():
         enc = tokenizer(
@@ -71,11 +81,20 @@ def run_baselines(
     device: torch.device,
 ):
     cf_scores, tarnet_scores = [], []
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name).to(device)
+    model.eval()
     for seed in seeds:
         set_seed(seed)
         X_tab, X_text, Y, T, true_te = get_multimodal_data(n=n_samples, vocab_size=1000, p_noise=p_noise)
         texts = to_text_strings(X_text)
-        text_emb = compute_bert_embeddings(texts, model_name=model_name, device=device)
+        text_emb = compute_bert_embeddings(
+            texts,
+            model_name=model_name,
+            device=device,
+            tokenizer=tokenizer,
+            model=model,
+        )
         X_concat = np.concatenate([X_tab, text_emb], axis=1)
 
         est = CausalForestDML(
@@ -123,15 +142,16 @@ def plot_bar(cf, tarnet, out_path: str):
     colors = ["#1f77b4", "#ff7f0e"]
     bars = ax.bar(models, scores, color=colors, alpha=0.85)
     ax.set_ylabel("PEHE (lower is better)")
-    ax.set_title("Frozen BERT/ClinicalBERT baselines", pad=18)
-    ax.set_ylim(0, max(scores) * 1.6)
+    ax.set_title("Frozen BERT/ClinicalBERT baselines", pad=20)
+    ax.set_ylim(0, max(scores) * 1.35)
+    ax.margins(y=0.05)
     ax.bar_label(
         bars,
         labels=[f"{v:.2f}" for v in scores],
-        padding=6,
+        label_type="center",
         fontweight="bold",
         fontsize=11,
-        color="black",
+        color="white",
     )
     fig.tight_layout()
     fig.savefig(out_path)
