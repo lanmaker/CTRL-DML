@@ -32,7 +32,9 @@ def compute_mask_metrics(seed: int = 42, n_samples: int = 2000, n_noise: int = 5
     )
     plugin.eval()
     with torch.no_grad():
-        masks = plugin.backbone.attn.mask_net(torch.from_numpy(X).float().to(plugin.backbone.attn.mask_net[0].weight.device))
+        masks = plugin.backbone.attn.mask_net(
+            torch.from_numpy(X).float().to(plugin.backbone.attn.mask_net[0].weight.device)
+        )
         masks_np = masks.cpu().numpy()
     mean_mask = masks_np.mean(axis=0)
 
@@ -46,17 +48,25 @@ def compute_mask_metrics(seed: int = 42, n_samples: int = 2000, n_noise: int = 5
         np.concatenate([np.ones_like(conf_vals), np.zeros_like(noise_vals)]),
         np.concatenate([conf_vals, noise_vals]),
     )
-    k = 6
-    topk = np.argsort(mean_mask)[::-1][:k]
-    precision_at_k = np.mean(topk < 5)
 
-    return {
-        "auc_conf_vs_noise": float(auc_conf_noise),
-        "precision_at_6": float(precision_at_k),
-        "mean_conf": float(conf_vals.mean()),
-        "mean_inst": float(mean_mask[inst_idx].mean()),
-        "mean_noise": float(noise_vals.mean()),
-    }
+    metrics = {"auc_conf_vs_noise": float(auc_conf_noise)}
+    for k in (5, 10):
+        topk = np.argsort(mean_mask)[::-1][:k]
+        conf_in_topk = np.sum(topk < 5)
+        precision = conf_in_topk / k
+        recall = conf_in_topk / 5.0
+        metrics[f"conf_in_top{k}"] = int(conf_in_topk)
+        metrics[f"precision@{k}"] = float(precision)
+        metrics[f"recall@{k}"] = float(recall)
+
+    metrics.update(
+        {
+            "mean_conf": float(conf_vals.mean()),
+            "mean_inst": float(mean_mask[inst_idx].mean()),
+            "mean_noise": float(noise_vals.mean()),
+        }
+    )
+    return metrics
 
 
 def evaluate_nuisance_variant(
