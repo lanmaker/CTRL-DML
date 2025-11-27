@@ -79,11 +79,12 @@ def run_baselines(
     seeds: list[int],
     model_name: str,
     device: torch.device,
+    epochs: int = 120,
 ):
     cf_scores, tarnet_scores = [], []
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).to(device)
-    model.eval()
+    bert_model = AutoModel.from_pretrained(model_name).to(device)
+    bert_model.eval()
     for seed in seeds:
         set_seed(seed)
         X_tab, X_text, Y, T, true_te = get_multimodal_data(n=n_samples, vocab_size=1000, p_noise=p_noise)
@@ -93,7 +94,7 @@ def run_baselines(
             model_name=model_name,
             device=device,
             tokenizer=tokenizer,
-            model=model,
+            model=bert_model,
         )
         X_concat = np.concatenate([X_tab, text_emb], axis=1)
 
@@ -116,7 +117,7 @@ def run_baselines(
         ds = TensorDataset(x_t, y_t, t_t)
         loader = DataLoader(ds, batch_size=128, shuffle=True)
         model.train()
-        for _ in range(120):
+        for _ in range(epochs):
             for bx, by, bt in loader:
                 opt.zero_grad()
                 y0, y1 = model(bx)
