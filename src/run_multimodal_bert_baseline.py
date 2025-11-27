@@ -117,17 +117,27 @@ def run_baselines(
 
 
 def plot_bar(cf, tarnet, out_path: str):
-    plt.figure(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(6, 4))
     models = ["BERT embed + CF", "BERT embed + TARNet"]
     scores = [cf, tarnet]
     colors = ["#1f77b4", "#ff7f0e"]
-    plt.bar(models, scores, color=colors, alpha=0.85)
-    plt.ylabel("PEHE (lower is better)")
-    plt.title("Frozen BERT/ClinicalBERT baselines")
-    for i, v in enumerate(scores):
-        plt.text(i, v + 0.02, f"{v:.2f}", ha="center", fontweight="bold")
-    plt.tight_layout()
-    plt.savefig(out_path)
+    bars = ax.bar(models, scores, color=colors, alpha=0.85)
+    ax.set_ylabel("PEHE (lower is better)")
+    ax.set_title("Frozen BERT/ClinicalBERT baselines", pad=10)
+    ax.set_ylim(0, max(scores) * 1.4)
+    for i, (bar, v) in enumerate(zip(bars, scores)):
+        # Place label inside the bar to avoid overlapping the title
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            v * 0.55,
+            f"{v:.2f}",
+            ha="center",
+            va="center",
+            fontweight="bold",
+            color="white",
+        )
+    fig.tight_layout()
+    fig.savefig(out_path)
     print(f"Saved {out_path}")
 
 
