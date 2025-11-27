@@ -123,21 +123,17 @@ def plot_bar(cf, tarnet, out_path: str):
     colors = ["#1f77b4", "#ff7f0e"]
     bars = ax.bar(models, scores, color=colors, alpha=0.85)
     ax.set_ylabel("PEHE (lower is better)")
-    ax.set_title("Frozen BERT/ClinicalBERT baselines", pad=10)
-    ax.set_ylim(0, max(scores) * 1.4)
-    for i, (bar, v) in enumerate(zip(bars, scores)):
-        # Place label inside the bar to avoid overlapping the title
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            v * 0.55,
-            f"{v:.2f}",
-            ha="center",
-            va="center",
-            fontweight="bold",
-            color="white",
-        )
+    ax.set_title("Frozen BERT/ClinicalBERT baselines", pad=14)
+    ax.set_ylim(0, max(scores) * 1.35)
+    ax.bar_label(
+        bars,
+        labels=[f"{v:.2f}" for v in scores],
+        label_type="center",
+        color="white",
+        fontweight="bold",
+    )
     fig.tight_layout()
-    fig.savefig(out_path)
+    fig.savefig(out_path, bbox_inches="tight")
     print(f"Saved {out_path}")
 
 
