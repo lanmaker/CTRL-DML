@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 
-from run_multimodal_benchmark import run_once as run_ctrl_vs_cf_once
+from run_multimodal_benchmark import run_once as run_ctrl_vs_cf_once, run_once_crossattn
 from run_multimodal_bert_baseline import run_baselines
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,8 +40,10 @@ def plot_sweep(summary: pd.DataFrame, methods: Iterable[str], filename: str = "m
     label_map = {
         "TFIDF_CF": "TF-IDF Causal Forest",
         "CTRL_DML": "CTRL-DML (dense text)",
+        "CTRL_DML_XATTN": "CTRL-DML (cross-attn)",
     }
-    for method, color in zip(methods, ["#1f77b4", "#2ca02c"]):
+    colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#9467bd"]
+    for method, color in zip(methods, colors):
         sub = summary[summary["method"] == method].sort_values("p_noise")
         plt.errorbar(
             sub["p_noise"],
@@ -66,6 +68,7 @@ def plot_bar(summary: pd.DataFrame, methods: list[str], p_noise: float, filename
     label_map = {
         "TFIDF_CF": "TF-IDF Causal Forest",
         "CTRL_DML": "CTRL-DML (dense text)",
+        "CTRL_DML_XATTN": "CTRL-DML (cross-attn)",
         "BERT_TARNet": "DistilBERT + TARNet",
         "BERT_CF": "DistilBERT + CF",
     }
@@ -94,6 +97,7 @@ def main():
     parser.add_argument("--bert-p-noise", type=float, default=0.0)
     parser.add_argument("--bert-epochs", type=int, default=90)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--skip-bert", action="store_true", help="Skip frozen BERT upper-bound baselines.")
     args = parser.parse_args()
 
     rows = []
@@ -112,21 +116,34 @@ def main():
             )
             rows.append({"method": "TFIDF_CF", "p_noise": p, "seed": seed, "pehe": pehe_cf})
             rows.append({"method": "CTRL_DML", "p_noise": p, "seed": seed, "pehe": pehe_ctrl})
+            # Cross-attention variant (lightweight)
+            _, pehe_ctrl_xa = run_once_crossattn(
+                n_samples=args.n_samples,
+                vocab_size=args.vocab_size,
+                p_noise=p,
+                seed=seed,
+                epochs=args.epochs + 10,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                embed_dim=args.embed_dim,
+            )
+            rows.append({"method": "CTRL_DML_XATTN", "p_noise": p, "seed": seed, "pehe": pehe_ctrl_xa})
 
-    device = torch.device(args.device)
-    print(f"\n=== Running frozen BERT baselines on {device} ===")
-    cf_mean, tarnet_mean, cf_scores, tarnet_scores = run_baselines(
-        n_samples=args.n_samples,
-        p_noise=args.bert_p_noise,
-        seeds=args.seeds,
-        model_name=args.bert_model,
-        device=device,
-        epochs=args.bert_epochs,
-    )
-    for seed, score in zip(args.seeds, cf_scores):
-        rows.append({"method": "BERT_CF", "p_noise": args.bert_p_noise, "seed": seed, "pehe": score})
-    for seed, score in zip(args.seeds, tarnet_scores):
-        rows.append({"method": "BERT_TARNet", "p_noise": args.bert_p_noise, "seed": seed, "pehe": score})
+    if not args.skip_bert:
+        device = torch.device(args.device)
+        print(f"\n=== Running frozen BERT baselines on {device} ===")
+        cf_mean, tarnet_mean, cf_scores, tarnet_scores = run_baselines(
+            n_samples=args.n_samples,
+            p_noise=args.bert_p_noise,
+            seeds=args.seeds,
+            model_name=args.bert_model,
+            device=device,
+            epochs=args.bert_epochs,
+        )
+        for seed, score in zip(args.seeds, cf_scores):
+            rows.append({"method": "BERT_CF", "p_noise": args.bert_p_noise, "seed": seed, "pehe": score})
+        for seed, score in zip(args.seeds, tarnet_scores):
+            rows.append({"method": "BERT_TARNet", "p_noise": args.bert_p_noise, "seed": seed, "pehe": score})
 
     df = pd.DataFrame(rows)
     for base in (ROOT, PAPER_DIR):
@@ -141,18 +158,14 @@ def main():
         print(f"Wrote summary to {out}")
 
     # Plot sweep for TF-IDF CF vs CTRL-DML
-    plot_sweep(summary, methods=["TFIDF_CF", "CTRL_DML"], filename="multimodal_sweep.pdf")
+    plot_sweep(summary, methods=["TFIDF_CF", "CTRL_DML", "CTRL_DML_XATTN"], filename="multimodal_sweep.pdf")
 
     # Bar for clean text (p_noise=0) CF vs CTRL-DML
     plot_bar(summary, methods=["TFIDF_CF", "CTRL_DML"], p_noise=0.0, filename="multimodal_result.pdf")
 
     # Bar showing lightweight CTRL-DML vs BERT upper bound
-    plot_bar(
-        summary,
-        methods=["TFIDF_CF", "CTRL_DML", "BERT_TARNet"],
-        p_noise=args.bert_p_noise,
-        filename="multimodal_bert_baselines.pdf",
-    )
+    upper_methods = ["TFIDF_CF", "CTRL_DML", "CTRL_DML_XATTN"] + ([] if args.skip_bert else ["BERT_TARNet"])
+    plot_bar(summary, methods=upper_methods, p_noise=args.bert_p_noise, filename="multimodal_bert_baselines.pdf")
 
 
 if __name__ == "__main__":

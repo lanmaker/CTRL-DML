@@ -1,106 +1,177 @@
+import argparse
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from my_dragonnet import MyDragonNet as DragonNet
 from sklearn.model_selection import train_test_split
-import os
 
-# === 1. Generate Data (Stress Data) ===
-def get_data(n=1000):
-    # Simple generation logic matching previous experiments
-    C = np.random.normal(0, 1, size=(n, 5)) 
-    I = np.random.normal(0, 1, size=(n, 5))
-    N = np.random.normal(0, 1, size=(n, 20)) # 20 dim noise
+from my_dragonnet import MyDragonNet as DragonNet
+
+
+def set_seed(seed: int) -> None:
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def get_data(n: int = 2000, n_noise: int = 50, seed: int = 42):
+    """Stress-test DGP with confounders, instruments, and noise."""
+    rng = np.random.default_rng(seed)
+    C = np.random.normal(0, 1, size=(n, 5))
+    I = rng.normal(0, 1, size=(n, 5))
+    N = rng.normal(0, 1, size=(n, n_noise))
     X = np.concatenate([C, I, N], axis=1)
-    
-    # True CATE
+
     true_te = 2 * np.sin(C[:, 0] * np.pi) + np.maximum(0, C[:, 1])
-    
-    # Generate T and Y
     logit = np.sum(C[:, :2], axis=1) + np.sum(I, axis=1)
     prop = 1 / (1 + np.exp(-logit))
     T = np.random.binomial(1, prop)
     y = np.sum(C, axis=1) + true_te * T + np.random.normal(0, 0.5, n)
-    
     return X, y, T, true_te
 
-# Use a reasonable sample size
-N_SAMPLES = 2000
-X, y, T, true_te = get_data(n=N_SAMPLES)
-X_train, X_test, y_train, y_test, T_train, T_test, te_train, te_test = train_test_split(
-    X, y, T, true_te, test_size=0.2, random_state=42
-)
 
-# === 2. Train Model (with dropout_prob) ===
-print("Training CTRL-DML with Dropout...")
-# Tuning for better coverage:
-# - n_units_r=400: Wider model to capture more uncertainty
-# - dropout_prob=0.3: Higher dropout for wider confidence intervals
-# - n_iter=1200: Slightly reduced iterations to prevent overfitting
-model = DragonNet(
-    n_unit_in=X.shape[1], 
-    n_units_r=800, 
-    dropout_prob=0.6, 
-    n_iter=200, 
-    batch_size=64
-)
-model.fit(X_train, y_train, T_train)
+def conformalize(pred_mean: np.ndarray, true_te: np.ndarray, alpha: float = 0.05) -> float:
+    """Return the (1-alpha) residual quantile for symmetric conformal intervals."""
+    residuals = np.abs(pred_mean - true_te)
+    q = np.quantile(residuals, 1 - alpha)
+    return float(q)
 
-# === 3. Core: Uncertainty Inference ===
-print("Running MC Dropout Inference...")
-# Predict mean, std, lower bound, upper bound
-pred_mean, pred_std, lower, upper = model.predict_with_uncertainty(X_test, n_runs=100)
 
-# === 4. Visualization (Sorted CATE Plot) ===
-# Sort by True CATE for better visualization
-sort_idx = np.argsort(te_test)
-te_sorted = te_test[sort_idx]
-mean_sorted = pred_mean[sort_idx]
-lower_sorted = lower[sort_idx]
-upper_sorted = upper[sort_idx]
+def plot_intervals(
+    te_true,
+    mc_mean,
+    mc_lower,
+    mc_upper,
+    conf_lower,
+    conf_upper,
+    mc_cover: float,
+    conf_cover: float,
+    filename: str,
+    ensemble_mean=None,
+    ensemble_lower=None,
+    ensemble_upper=None,
+    ensemble_cover=None,
+):
+    """Two-panel plot: intervals and coverage bars."""
+    sort_idx = np.argsort(te_true)
+    te_sorted = te_true[sort_idx]
+    mc_mean_sorted = mc_mean[sort_idx]
+    mc_lower_sorted = mc_lower[sort_idx]
+    mc_upper_sorted = mc_upper[sort_idx]
+    conf_lower_sorted = conf_lower[sort_idx]
+    conf_upper_sorted = conf_upper[sort_idx]
 
-# === Plotting Optimization ===
-plt.figure(figsize=(12, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    limit = min(140, len(te_sorted))
+    xs = np.arange(limit)
 
-# Only plot the first 100 samples for clarity
-limit = 100 
-subset_te = te_sorted[:limit]
-subset_mean = mean_sorted[:limit]
-subset_lower = lower_sorted[:limit]
-subset_upper = upper_sorted[:limit]
+    axes[0].plot(xs, te_sorted[:limit], color="black", linestyle="--", linewidth=2.0, label="True CATE")
+    axes[0].plot(xs, mc_mean_sorted[:limit], color="#2ca02c", linewidth=1.5, label="MC Dropout mean")
+    axes[0].fill_between(xs, mc_lower_sorted[:limit], mc_upper_sorted[:limit], color="#2ca02c", alpha=0.25, label="MC Dropout 95%")
+    axes[0].fill_between(xs, conf_lower_sorted[:limit], conf_upper_sorted[:limit], color="#ff7f0e", alpha=0.18, label="Conformal 95%")
+    if ensemble_mean is not None:
+        ens_mean_sorted = ensemble_mean[sort_idx][:limit]
+        ens_low_sorted = ensemble_lower[sort_idx][:limit]
+        ens_up_sorted = ensemble_upper[sort_idx][:limit]
+        axes[0].plot(xs, ens_mean_sorted, color="#9467bd", linewidth=1.5, label="Ensemble mean")
+        axes[0].fill_between(xs, ens_low_sorted, ens_up_sorted, color="#9467bd", alpha=0.15, label="Ensemble 95%")
+    axes[0].set_xlabel("Sorted samples")
+    axes[0].set_ylabel("CATE")
+    axes[0].set_title("Intervals (MC Dropout vs Conformal)")
+    axes[0].legend(loc="upper left", fontsize=8)
+    axes[0].grid(alpha=0.2)
 
-# 1. Ground Truth (Thicker line)
-plt.plot(subset_te, color='black', linestyle='--', linewidth=2.5, label='Ground Truth CATE')
+    mc_width = np.mean(mc_upper - mc_lower)
+    conf_width = np.mean(conf_upper - conf_lower)
+    labels = ["MC Dropout\ncoverage", "Conformal\ncoverage"]
+    vals = [mc_cover, conf_cover]
+    colors = ["#2ca02c", "#ff7f0e"]
+    if ensemble_cover is not None:
+        labels.append("Ensemble\ncoverage")
+        vals.append(ensemble_cover)
+        colors.append("#9467bd")
+    axes[1].bar(labels, vals, color=colors)
+    axes[1].set_ylim(0, 1)
+    axes[1].set_ylabel("Coverage")
+    axes[1].set_title(f"Avg widths | MC={mc_width:.2f}, Conf={conf_width:.2f}")
 
-# 2. Prediction (Add transparency)
-plt.plot(subset_mean, color='#2ca02c', alpha=0.9, linewidth=1.5, label='CTRL-DML Prediction')
+    plt.tight_layout()
+    plt.savefig(filename, bbox_inches="tight")
+    print(f"Saved {filename}")
 
-# 3. Confidence Interval (Darker color)
-plt.fill_between(range(limit), subset_lower, subset_upper, 
-                 color='#2ca02c', alpha=0.3, label='95% Confidence Interval')
 
-plt.xlabel("Test Samples (Sorted by Effect)")
-plt.ylabel("Causal Effect (CATE)")
-plt.title(f"Uncertainty Quantification (Dropout=0.3) | Subset of {limit} samples")
-plt.legend(loc='upper left')
-plt.grid(True, alpha=0.3)
+def main():
+    parser = argparse.ArgumentParser(description="Uncertainty analysis: MC Dropout vs conformalized intervals.")
+    parser.add_argument("--n", type=int, default=2000)
+    parser.add_argument("--n-noise", type=int, default=50)
+    parser.add_argument("--dropout", type=float, default=0.6)
+    parser.add_argument("--runs", type=int, default=100)
+    parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--n-ensemble", type=int, default=1, help="Number of independently initialized CTRL-DML models.")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
 
-output_path = "uq_analysis_fixed.pdf"
-plt.savefig(output_path, dpi=300)
-print(f"Visualization complete! Saved to {output_path}")
+    X, y, T, true_te = get_data(n=args.n, n_noise=args.n_noise, seed=args.seed)
+    X_train, X_test, y_train, y_test, T_train, T_test, te_train, te_test = train_test_split(
+        X, y, T, true_te, test_size=0.2, random_state=42
+    )
 
-# === 5. Coverage Metric ===
-# A good uncertainty estimate should have ~95% coverage for 95% CI
-inside_interval = (te_test >= lower) & (te_test <= upper)
-coverage_rate = np.mean(inside_interval)
-print(f"\n>>> Metric Evaluation:")
-print(f"Coverage Rate (Target ~0.95): {coverage_rate:.4f}")
-print(f"Mean Uncertainty (Avg Std): {np.mean(pred_std):.4f}")
+    print("Training CTRL-DML with MC Dropout for UQ...")
+    ensemble_means = []
+    ensemble_vars = []
+    for m_idx in range(args.n_ensemble):
+        set_seed(args.seed + m_idx)
+        model = DragonNet(
+            n_unit_in=X.shape[1],
+            n_units_r=800,
+            dropout_prob=args.dropout,
+            n_iter=220,
+            batch_size=64,
+        )
+        model.fit(X_train, y_train, T_train)
+        mc_mean, mc_std, mc_lower, mc_upper = model.predict_with_uncertainty(X_test, n_runs=args.runs)
+        ensemble_means.append(mc_mean)
+        ensemble_vars.append(mc_std ** 2)
 
-# Interpretation
-if coverage_rate < 0.8:
-    print("Warning: Model is Over-confident (Coverage < 0.8). Consider increasing dropout_prob.")
-elif coverage_rate > 0.99:
-    print("Warning: Model is Under-confident (Coverage > 0.99). Consider decreasing dropout_prob.")
-else:
-    print("Success: Coverage is within a reasonable range!")
+    mc_mean = np.mean(ensemble_means, axis=0)
+    within_var = np.mean(ensemble_vars, axis=0)
+    between_var = np.var(ensemble_means, axis=0)
+    total_std = np.sqrt(within_var + between_var)
+    mc_lower = mc_mean - 1.96 * total_std
+    mc_upper = mc_mean + 1.96 * total_std
+
+    # Conformalized intervals using a calibration split from the test fold
+    cal_size = len(te_test) // 4
+    cal_mean, cal_true = mc_mean[:cal_size], te_test[:cal_size]
+    q = conformalize(cal_mean, cal_true, alpha=args.alpha)
+    conf_lower = mc_mean - q
+    conf_upper = mc_mean + q
+
+    # Coverage metrics
+    mc_cover = float(np.mean((te_test >= mc_lower) & (te_test <= mc_upper)))
+    conf_cover = float(np.mean((te_test >= conf_lower) & (te_test <= conf_upper)))
+    ensemble_cover = mc_cover if args.n_ensemble > 1 else None
+    print(
+        f"Coverage | MC Dropout (ensemble={args.n_ensemble}): {mc_cover:.3f} | "
+        f"Conformal: {conf_cover:.3f} (target {1-args.alpha:.2f})"
+    )
+
+    plot_intervals(
+        te_test,
+        mc_mean,
+        mc_lower,
+        mc_upper,
+        conf_lower,
+        conf_upper,
+        mc_cover,
+        conf_cover,
+        filename="uq_conformal.pdf",
+        ensemble_mean=mc_mean,
+        ensemble_lower=mc_lower,
+        ensemble_upper=mc_upper,
+        ensemble_cover=ensemble_cover,
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -28,25 +28,29 @@ def run_once(
     lr: float = 0.002,
     weight_decay: float = 0.002,
     embed_dim: int = 16,
+    fusion: str = "bag",
+    run_cf: bool = True,
 ):
     set_seed(seed)
     print(f"Generating Multimodal Data (p_noise={p_noise})...")
     X_tab, X_text, Y, T, true_te = get_multimodal_data(n=n_samples, vocab_size=vocab_size, p_noise=p_noise)
 
-    print("Running Causal Forest (Baseline)...")
-    X_tfidf = convert_text_to_tfidf(X_text, vocab_size)
-    X_combined = np.concatenate([X_tab, X_tfidf], axis=1)
-    est = CausalForestDML(
-        model_y=LassoCV(),
-        model_t=LogisticRegressionCV(max_iter=1000),
-        n_estimators=100,
-        discrete_treatment=True,
-        random_state=seed,
-    )
-    est.fit(Y, T, X=X_combined)
-    pred_cf = est.effect(X_combined).flatten()
-    pehe_cf = float(np.sqrt(np.mean((true_te - pred_cf) ** 2)))
-    print(f"Causal Forest PEHE: {pehe_cf:.4f}")
+    pehe_cf = None
+    if run_cf:
+        print("Running Causal Forest (Baseline)...")
+        X_tfidf = convert_text_to_tfidf(X_text, vocab_size)
+        X_combined = np.concatenate([X_tab, X_tfidf], axis=1)
+        est = CausalForestDML(
+            model_y=LassoCV(),
+            model_t=LogisticRegressionCV(max_iter=1000),
+            n_estimators=100,
+            discrete_treatment=True,
+            random_state=seed,
+        )
+        est.fit(Y, T, X=X_combined)
+        pred_cf = est.effect(X_combined).flatten()
+        pehe_cf = float(np.sqrt(np.mean((true_te - pred_cf) ** 2)))
+        print(f"Causal Forest PEHE: {pehe_cf:.4f}")
 
     print("Running Multimodal CTRL-DML (Ours)...")
     xt_tab = torch.from_numpy(X_tab).float()
@@ -54,7 +58,7 @@ def run_once(
     yt = torch.from_numpy(Y).float().unsqueeze(1)
     tt = torch.from_numpy(T).float().unsqueeze(1)
 
-    model = MultimodalCTRL(n_tab_input=10, vocab_size=vocab_size, embed_dim=embed_dim)
+    model = MultimodalCTRL(n_tab_input=10, vocab_size=vocab_size, embed_dim=embed_dim, fusion=fusion)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     for epoch in range(epochs):
@@ -66,7 +70,7 @@ def run_once(
         loss = loss_y + loss_t
         loss.backward()
         optimizer.step()
-        if epoch % 100 == 0:
+        if epoch % 50 == 0:
             print(f"Epoch {epoch} loss: {loss.item():.4f}")
 
     model.eval()
@@ -76,6 +80,32 @@ def run_once(
     pehe_ours = float(np.sqrt(np.mean((true_te - pred_ours) ** 2)))
     print(f"Multimodal CTRL-DML PEHE: {pehe_ours:.4f}")
     return pehe_cf, pehe_ours
+
+
+def run_once_crossattn(
+    n_samples: int,
+    vocab_size: int,
+    p_noise: float,
+    seed: int = 42,
+    epochs: int = 80,
+    lr: float = 0.002,
+    weight_decay: float = 0.002,
+    embed_dim: int = 16,
+    run_cf: bool = False,
+):
+    """Variant with cross-attention fusion (tabular queries over text tokens)."""
+    return run_once(
+        n_samples=n_samples,
+        vocab_size=vocab_size,
+        p_noise=p_noise,
+        seed=seed,
+        epochs=epochs,
+        lr=lr,
+        weight_decay=weight_decay,
+        embed_dim=embed_dim,
+        fusion="cross_attn",
+        run_cf=run_cf,
+    )
 
 
 def plot_bar(pehe_cf: float, pehe_ours: float, out_path: str = "multimodal_result.pdf"):

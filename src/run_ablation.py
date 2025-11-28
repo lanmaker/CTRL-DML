@@ -182,6 +182,7 @@ def train_nuisance(
     hidden_dim: int = HIDDEN_DIM,
     batch_size: int = BATCH_SIZE,
     epochs: int = EPOCHS_NUISANCE,
+    t_weight: float = 1.0,
 ) -> NuisanceNet:
     set_seed(seed)
     model = NuisanceNet(X.shape[1], hidden_dim, dropout_p, use_gating).to(DEVICE)
@@ -201,7 +202,7 @@ def train_nuisance(
             y_pred = bt * y1_pred + (1 - bt) * y0_pred
             loss_y = torch.mean((y_pred.squeeze() - by) ** 2)
             loss_t = torch.nn.functional.binary_cross_entropy(t_prob.squeeze(), bt)
-            loss = loss_y + loss_t + lambda_sparsity * model.mask_penalty
+            loss = loss_y + t_weight * loss_t + lambda_sparsity * model.mask_penalty
             loss.backward()
             opt.step()
     return model
@@ -220,6 +221,7 @@ def cross_fit_nuisance(
     batch_size: int = BATCH_SIZE,
     epochs: int = EPOCHS_NUISANCE,
     clip_prop: float = 0.01,
+    t_weight: float = 1.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """K-fold cross-fitting for orthogonal residuals."""
     kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
@@ -238,6 +240,7 @@ def cross_fit_nuisance(
             hidden_dim=hidden_dim,
             batch_size=batch_size,
             epochs=epochs,
+            t_weight=t_weight,
         )
         model.eval()
         with torch.no_grad():
@@ -290,6 +293,7 @@ def train_rlearner(
     aux_beta_start: float = 0.1,
     aux_beta_end: float = 0.0,
     aux_decay_epochs: int = 50,
+    freeze_backbone: bool = False,
 ) -> TauNet:
     set_seed(seed)
     model = TauNet(X.shape[1], hidden_dim, dropout_p, use_gating).to(DEVICE)
@@ -300,7 +304,10 @@ def train_rlearner(
             model.head.weight.copy_(warm_start_from.y1.weight - warm_start_from.y0.weight)
             model.head.bias.copy_(warm_start_from.y1.bias - warm_start_from.y0.bias)
 
-    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    if freeze_backbone:
+        for name, param in model.backbone.named_parameters():
+            param.requires_grad = False
+    opt = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-5)
     x_t = torch.from_numpy(X).float().to(DEVICE)
     z_t = torch.from_numpy(Z).float().to(DEVICE)
     w_t = torch.from_numpy(np.maximum(weights, 1e-6)).float().to(DEVICE)
@@ -416,6 +423,7 @@ def run_ablation(
     aux_decay_epochs: int,
     plugin_lr: float,
     save_plugin: bool,
+    freeze_backbone: bool,
 ):
     @dataclass
     class Variant:
@@ -496,6 +504,7 @@ def run_ablation(
                 aux_beta_start=aux_beta_start,
                 aux_beta_end=aux_beta_end,
                 aux_decay_epochs=aux_decay_epochs,
+                freeze_backbone=freeze_backbone,
             )
             tau_pred = predict_tau_rlearner(tau_model, X)
             pehe_orth = evaluate_pehe(tau_pred, true_te)
@@ -606,6 +615,11 @@ def parse_args():
         action="store_true",
         help="Skip saving plug-in checkpoints.",
     )
+    parser.add_argument(
+        "--freeze-backbone",
+        action="store_true",
+        help="Freeze the backbone during tau fine-tuning (keeps gating fixed for stability).",
+    )
     return parser.parse_args()
 
 
@@ -635,4 +649,5 @@ if __name__ == "__main__":
         aux_decay_epochs=args.aux_decay_epochs,
         plugin_lr=args.plugin_lr,
         save_plugin=not args.no_save_plugin,
+        freeze_backbone=args.freeze_backbone,
     )
