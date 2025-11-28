@@ -101,14 +101,14 @@ def plot_results(full: tuple[float, float], dropped: tuple[float, float]) -> Non
     ymax = max(vals_full + vals_drop) + 0.25
     ax.set_ylim(0, ymax)
     for i, v in enumerate(vals_full):
-        ax.text(x[i] - width / 2, min(v + 0.08, ymax - 0.05), f"{v:.2f}", ha="center", va="bottom")
+        ax.text(x[i] - width / 2, v - 0.08, f"{v:.2f}", ha="center", va="top", color="white", fontweight="bold")
     for i, v in enumerate(vals_drop):
-        ax.text(x[i] + width / 2, min(v + 0.08, ymax - 0.05), f"{v:.2f}", ha="center", va="bottom")
+        ax.text(x[i] + width / 2, v - 0.08, f"{v:.2f}", ha="center", va="top", color="white", fontweight="bold")
     ax.set_ylabel("PEHE (lower is better)")
     ax.set_title("Bias/variance under missing confounder", pad=10)
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.legend(loc="upper right", framealpha=0.9)
+    ax.legend(loc="upper right", framealpha=0.9, bbox_to_anchor=(0.98, 0.98))
     ax.grid(alpha=0.2, axis="y")
     plt.tight_layout()
     for base in (ROOT, PAPER_DIR):
