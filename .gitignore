@@ -37,6 +37,10 @@ venv/
 env/
 ENV/
 
+# Downloaded benchmarks
+data/twins/
+data/acic2019/
+
 # Generated Artifacts
 *.pdf
 *.npz
