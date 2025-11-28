@@ -135,14 +135,6 @@ def plot_results(full: tuple[float, float], dropped: tuple[float, float], seeds:
     ax.set_xticklabels(labels)
     ax.legend(loc="upper right", framealpha=0.9, bbox_to_anchor=(0.98, 0.98))
     ax.grid(alpha=0.2, axis="y")
-    ax.text(
-        0.02,
-        0.95,
-        f"Seeds: {seeds}",
-        transform=ax.transAxes,
-        fontsize=9,
-        va="top",
-    )
     plt.tight_layout()
     for base in (ROOT, PAPER_DIR):
         out = base / "bias_variance.pdf"
@@ -153,8 +145,8 @@ def plot_results(full: tuple[float, float], dropped: tuple[float, float], seeds:
 def main():
     parser = argparse.ArgumentParser(description="Bias/variance when confounders are dropped.")
     parser.add_argument("--n-samples", type=int, default=2000)
-    parser.add_argument("--n-noise", type=int, default=10)
-    parser.add_argument("--seeds", type=int, nargs="+", default=[42, 7, 1024])
+    parser.add_argument("--n-noise", type=int, default=50)
+    parser.add_argument("--seeds", type=int, nargs="+", default=[42, 7])
     args = parser.parse_args()
 
     full, dropped = run_many(args.seeds, args.n_samples, args.n_noise)
