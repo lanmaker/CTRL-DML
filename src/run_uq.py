@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
@@ -98,6 +99,7 @@ def plot_intervals(
     plt.tight_layout()
     plt.savefig(filename, bbox_inches="tight")
     print(f"Saved {filename}")
+    return mc_width, conf_width
 
 
 def main():
@@ -109,6 +111,7 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--n-ensemble", type=int, default=1, help="Number of independently initialized CTRL-DML models.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--metrics-csv", type=str, default="uq_metrics.csv")
     args = parser.parse_args()
 
     X, y, T, true_te = get_data(n=args.n, n_noise=args.n_noise, seed=args.seed)
@@ -156,7 +159,7 @@ def main():
         f"Conformal: {conf_cover:.3f} (target {1-args.alpha:.2f})"
     )
 
-    plot_intervals(
+    mc_width, conf_width = plot_intervals(
         te_test,
         mc_mean,
         mc_lower,
@@ -171,6 +174,25 @@ def main():
         ensemble_upper=mc_upper,
         ensemble_cover=ensemble_cover,
     )
+    # Save summary metrics for the paper.
+    import pandas as pd
+
+    metrics = {
+        "n": args.n,
+        "n_noise": args.n_noise,
+        "runs": args.runs,
+        "dropout": args.dropout,
+        "alpha": args.alpha,
+        "n_ensemble": args.n_ensemble,
+        "mc_coverage": mc_cover,
+        "conf_coverage": conf_cover,
+        "mc_width": mc_width,
+        "conf_width": conf_width,
+        "cal_size": len(te_test) // 4,
+    }
+    out = pd.DataFrame([metrics])
+    out.to_csv(args.metrics_csv, index=False)
+    print(f"Wrote metrics to {args.metrics_csv}")
 
 
 if __name__ == "__main__":
