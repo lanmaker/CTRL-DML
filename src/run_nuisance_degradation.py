@@ -93,6 +93,7 @@ def run_once(level: NuisanceLevel, seed: int, n_samples: int, n_noise: int):
     R = y - m_hat
     W = T - e_hat
     # Plug-in TARNet
+    plugin_epochs = 200 if level.name == "strong" else 80 if level.name == "shallow" else 40
     plugin = train_tarnet(
         X,
         y,
@@ -103,7 +104,7 @@ def run_once(level: NuisanceLevel, seed: int, n_samples: int, n_noise: int):
         dropout_p=0.25,
         hidden_dim=96,
         batch_size=192,
-        epochs=200,
+        epochs=plugin_epochs,
         lr=0.003,
     )
     tau_plugin = predict_tau_tarnet(plugin, X)
