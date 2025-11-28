@@ -3,9 +3,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.special import expit
 
 from run_ablation import (
-    get_stress_data,
     train_plugin,
     cross_fit_nuisance,
     stabilize_residuals,
@@ -24,10 +24,25 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
 
 
+def generate_linear_dgp(n_samples: int, n_noise: int, seed: int):
+    """Simple linear DGP with strong confounders for clear bias/variance contrast."""
+    rng = np.random.default_rng(seed)
+    C = rng.normal(0, 1, size=(n_samples, 5))
+    I = rng.normal(0, 1, size=(n_samples, 5))
+    N = rng.normal(0, 1, size=(n_samples, n_noise))
+    X = np.concatenate([C, I, N], axis=1)
+    logit = 2 * C[:, 0] + 1.5 * C[:, 1] + 1.0 * I.sum(axis=1)
+    e = expit(logit)
+    T = rng.binomial(1, e).astype(np.float32)
+    true_te = 3.0 * C[:, 0] + 2.0 * C[:, 1]
+    y = (4.0 * C[:, 0] + 1.5 * C[:, 1] + 0.5 * C[:, 2]) + true_te * T + rng.normal(0, 0.3, size=n_samples)
+    return X.astype(np.float32), T.astype(np.float32), y.astype(np.float32), true_te.astype(np.float32)
+
+
 def run_once(n_samples: int, n_noise: int, seed: int, drop_conf: bool) -> tuple[float, float]:
     """Train plug-in TARNet and orthogonal head with/without a removed confounder."""
     set_seed(seed)
-    X, T, y, true_te = get_stress_data(n_samples=n_samples, n_noise=n_noise, seed=seed)
+    X, T, y, true_te = generate_linear_dgp(n_samples=n_samples, n_noise=n_noise, seed=seed)
     if drop_conf:
         X = X.copy()
         X[:, :5] = 0.0  # simulate missing all confounders
@@ -88,7 +103,17 @@ def run_once(n_samples: int, n_noise: int, seed: int, drop_conf: bool) -> tuple[
     return evaluate_pehe(tau_plugin, true_te), evaluate_pehe(tau_dml, true_te)
 
 
-def plot_results(full: tuple[float, float], dropped: tuple[float, float]) -> None:
+def run_many(seeds: list[int], n_samples: int, n_noise: int) -> tuple[tuple[float, float], tuple[float, float]]:
+    full_vals, drop_vals = [], []
+    for s in seeds:
+        full_vals.append(run_once(n_samples, n_noise, s, drop_conf=False))
+        drop_vals.append(run_once(n_samples, n_noise, s, drop_conf=True))
+    full_mean = tuple(float(np.mean([v[i] for v in full_vals])) for i in range(2))
+    drop_mean = tuple(float(np.mean([v[i] for v in drop_vals])) for i in range(2))
+    return full_mean, drop_mean
+
+
+def plot_results(full: tuple[float, float], dropped: tuple[float, float], seeds: list[int]) -> None:
     labels = ["Plug-in", "DML (orthogonal)"]
     vals_full = [full[0], full[1]]
     vals_drop = [dropped[0], dropped[1]]
@@ -110,6 +135,14 @@ def plot_results(full: tuple[float, float], dropped: tuple[float, float]) -> Non
     ax.set_xticklabels(labels)
     ax.legend(loc="upper right", framealpha=0.9, bbox_to_anchor=(0.98, 0.98))
     ax.grid(alpha=0.2, axis="y")
+    ax.text(
+        0.02,
+        0.95,
+        f"Seeds: {seeds}",
+        transform=ax.transAxes,
+        fontsize=9,
+        va="top",
+    )
     plt.tight_layout()
     for base in (ROOT, PAPER_DIR):
         out = base / "bias_variance.pdf"
@@ -118,19 +151,16 @@ def plot_results(full: tuple[float, float], dropped: tuple[float, float]) -> Non
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Bias/variance when a confounder is dropped.")
+    parser = argparse.ArgumentParser(description="Bias/variance when confounders are dropped.")
     parser.add_argument("--n-samples", type=int, default=2000)
-    parser.add_argument("--n-noise", type=int, default=50)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--n-noise", type=int, default=10)
+    parser.add_argument("--seeds", type=int, nargs="+", default=[42, 7, 1024])
     args = parser.parse_args()
 
-    print("Training with all confounders...")
-    full = run_once(args.n_samples, args.n_noise, args.seed, drop_conf=False)
-    print(f"PEHE full | Plug-in={full[0]:.3f} | DML={full[1]:.3f}")
-    print("Training with one confounder dropped...")
-    dropped = run_once(args.n_samples, args.n_noise, args.seed, drop_conf=True)
-    print(f"PEHE drop | Plug-in={dropped[0]:.3f} | DML={dropped[1]:.3f}")
-    plot_results(full, dropped)
+    full, dropped = run_many(args.seeds, args.n_samples, args.n_noise)
+    print(f"PEHE (avg over seeds) | Plug-in: full={full[0]:.3f}, drop={dropped[0]:.3f}")
+    print(f"PEHE (avg over seeds) | DML: full={full[1]:.3f}, drop={dropped[1]:.3f}")
+    plot_results(full, dropped, args.seeds)
 
 
 if __name__ == "__main__":
