@@ -77,6 +77,10 @@ def load_twins(return_df: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndar
         Y_list.append(float(y[light_idx]))
 
     X = np.vstack(X_list).astype(np.float32)
+    # Replace any residual NaNs in covariates with column means
+    col_means = np.nanmean(X, axis=0)
+    inds = np.where(np.isnan(X))
+    X[inds] = np.take(col_means, inds[1])
     T = np.array(T_list, dtype=np.float32)
     Y = np.array(Y_list, dtype=np.float32)
     if return_df:
