@@ -73,12 +73,16 @@ def plot_bar(summary: pd.DataFrame, methods: list[str], p_noise: float, filename
         "BERT_CF": "DistilBERT + CF",
     }
     colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#9467bd"][: len(sub)]
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
     labels = [label_map.get(m, m) for m in sub["method"]]
     bars = ax.bar(labels, sub["mean_pehe"], yerr=sub["std_pehe"], color=colors, alpha=0.85)
     ax.set_ylabel("PEHE (lower is better)")
     ax.set_title(f"Multimodal baselines (p_noise={p_noise})", pad=12)
-    ax.bar_label(bars, labels=[f"{v:.2f}" for v in sub["mean_pehe"]], label_type="edge", padding=4)
+    top = (sub["mean_pehe"] + sub["std_pehe"].fillna(0)).max()
+    ax.set_ylim(0, top + 0.3)
+    ax.bar_label(bars, labels=[f"{v:.2f}" for v in sub["mean_pehe"]], label_type="edge", padding=6)
+    plt.setp(ax.get_xticklabels(), rotation=12, ha="right")
+    ax.margins(y=0.1)
     plt.tight_layout()
     save_fig(fig, filename)
 
