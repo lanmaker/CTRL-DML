@@ -29,6 +29,9 @@ wheels/
 # Mac
 .DS_Store
 
+# Local Yelp dump (large, user-provided)
+Yelp JSON/
+
 # Virtual Env
 venv/
 env/
