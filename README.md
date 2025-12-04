@@ -10,23 +10,27 @@
 
 ## Story Arc
 
-**Conflict.** Deep nets like DragonNet often overfit noise in causal inference, while tree models struggle with unstructured text.  
-**Solution.** CTRL-DML adds sparse attention to “learn to stay quiet” on junk features and uses a text tower for embeddings.  
+**Conflict.** Deep nets like DragonNet overfit noise; trees ignore unstructured text; DML can be unstable without care.  
+**Solution.** CTRL-DML makes DML a first-class citizen: sparse tabular attention, modular nuisances, and an orthogonal head (ratio targets + warm-start + clipping) with optional distillation.  
 **Evidence.**  
-- White-box: feature-importance shows signal vs. noise separation.  
-- Robustness: holds up under high-dimensional noise.  
-- Scaling law: once N > 4k, CTRL-DML closes the gap with Causal Forest.  
-**Killer features.** Multimodal text + tabular cuts error by ~62% in text-heavy settings; MC Dropout provides calibrated uncertainty.
+- White-box: feature-role plots separate confounders/instruments/noise.  
+- Robustness: stable PEHE as nuisance dimensions grow; orthogonal head degrades more gracefully when nuisances are weakened.  
+- Scaling: with noise=50, CTRL-DML closes the gap and edges trees as $N$ grows.  
+- Multimodal: dense text+tabular (and cross-attn) beat TF-IDF forests; orthogonal head stays competitive.  
+- Public baselines: TWINS/ACIC loaders + baselines included; semi-synthetic Yelp text+tabular benchmark with ground-truth CATE.  
+**Reliability.** MC Dropout under-covers; conformal calibration restores nominal coverage (see `uq_conformal.pdf`, `uq_metrics.csv`).
 
 ---
 
 ## Key Results
 
-- **Interpretability:** Feature gating suppresses noise (see `feature_importance_sparse.pdf`).
+- **Interpretability:** Feature gating suppresses noise (see `feature_importance_sparse.pdf`, `feature_roles.pdf`).
 - **Robustness:** Stable PEHE as noise dimensions grow (see `robustness_solid.pdf`).
-- **Scaling law:** Deep model overtakes trees at larger N (see `scaling_results.pdf` and `scaling_delta.pdf`).
-- **Multimodal:** Text-aware CTRL-DML beats TF-IDF trees by ~62% (see `multimodal_result.pdf`).
-- **Reliability:** MC Dropout intervals for risk-aware decisions (see `uq_analysis_fixed.pdf`).
+- **Scaling law:** CTRL-DML vs CF across $N$ (see `scaling_dml.pdf`, `scaling_results.pdf`).
+- **Nuisance misspecification:** Orthogonal head is less sensitive when nuisances are weak (`nuisance_misspec.pdf`).
+- **Multimodal:** Dense and cross-attn text + tabular outperform TF-IDF trees (`multimodal_dml.pdf`, `multimodal_result.pdf`).
+- **Semi-synthetic real text+tabular:** Yelp-based benchmark with known CATE (`yelp_semisynth.pdf`).
+- **Reliability:** MC Dropout vs conformal intervals (`uq_conformal.pdf`, `uq_metrics.csv`).
 
 ---
 
@@ -41,7 +45,7 @@ pip install -r requirements.txt
 pip install -e external/CATENets
 ```
 
-### Benchmarks
+### Benchmarks (DML-ready)
 
 - **Noise robustness (DragonNet vs CTRL-DML):**
   ```bash
@@ -58,26 +62,34 @@ pip install -e external/CATENets
   ```
   Outputs: `benchmark_final.pdf`, `benchmark_final_delta.pdf`.
 
-- **Scaling law (sample size sweep):**
+- **Scaling law (sample size sweep, plug-in vs DML vs CF):**
   ```bash
-  # Fast sanity run
-  CTRL_DML_FAST=1 python src/run_scaling.py
-  # Full run
-  python src/run_scaling.py
+  python src/run_scaling_dml.py --sample-sizes 500 1000 2000
   ```
-  Outputs: `scaling_results.pdf`, `scaling_delta.pdf`.
+  Outputs: `scaling_dml.pdf`, `scaling_dml.csv`.
 
-- **Multimodal text + tabular:**
+- **Multimodal text + tabular (plug-in vs DML vs TF-IDF CF):**
   ```bash
-  python src/run_multimodal_benchmark.py
+  python src/run_multimodal_dml.py --n 1500 --vocab-size 500 --p-noise 0.0
   ```
-  Outputs: `multimodal_result.pdf`.
+  Outputs: `multimodal_dml.pdf`, `multimodal_dml.csv`.
 
-- **Uncertainty quantification (MC Dropout):**
+- **Semi-synthetic Yelp text+tabular (ground-truth CATE):**
   ```bash
-  python src/run_uq.py
+  python src/run_yelp_semisynth.py --yelp-dir "Yelp JSON/yelp_dataset" --n-rows 2000
   ```
-  Outputs: `uq_analysis_fixed.pdf`.
+  Outputs: `yelp_semisynth.pdf`, `yelp_semisynth.csv`.
+
+- **Uncertainty quantification (MC Dropout + conformal):**
+  ```bash
+  python src/run_uq.py --metrics-csv uq_metrics.csv
+  ```
+  Outputs: `uq_conformal.pdf`, `uq_metrics.csv`.
+- **Nuisance misspecification (plug-in vs DML sensitivity):**
+  ```bash
+  python src/run_nuisance_misspec.py --n-samples 1000 --n-noise 50 --seeds 42 7
+  ```
+  Outputs: `nuisance_misspec.pdf`, `nuisance_misspec.csv`.
 
 ---
 
@@ -98,13 +110,18 @@ CTRL-DML/
 ├── external/CATENets/         # Baseline library (vendor)
 ├── src/
 │   ├── my_dragonnet.py        # CTRL-DML base estimator with sparse attention
+│   ├── ctrl_orthogonal_learner.py # High-level staged DML wrapper (warm start, cross-fit, orthogonal head)
 │   ├── model_multimodal.py    # Two-tower multimodal architecture
 │   ├── data_multimodal.py     # Text + tabular data generators
+│   ├── run_scaling_dml.py     # CF vs plug-in vs orthogonal across N
+│   ├── run_multimodal_dml.py  # Multimodal benchmark with orthogonal head
+│   ├── run_yelp_semisynth.py  # Semi-synthetic Yelp text+tabular with known CATE
+│   ├── run_nuisance_misspec.py# Nuisance degradation study (plug-in vs DML)
 │   ├── run_benchmark_final.py # Noise benchmark vs DragonNet & Causal Forest
 │   ├── run_scaling.py         # Scaling law benchmark
 │   ├── run_robustness_solid.py# Robustness to high-dimensional noise
 │   ├── run_multimodal_benchmark.py
-│   └── run_uq.py              # Uncertainty quantification
+│   └── run_uq.py              # Uncertainty quantification + metrics CSV
 ├── requirements.txt
 └── README.md
 ```
