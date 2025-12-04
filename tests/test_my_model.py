@@ -1,19 +1,20 @@
-from my_dragonnet import MyDragonNet
 import numpy as np
 import torch
 
+from my_dragonnet import MyDragonNet
+from run_ablation import get_stress_data, set_seed
+
 def test_my_model():
-    # 1. Load stress data
-    print("Loading stress_data.npz...")
-    data = np.load("stress_data.npz")
-    X, T, y, true_te = data['X'], data['T'], data['y'], data['true_te']
+    # 1. Generate synthetic stress data (no external file needed)
+    set_seed(0)
+    X, T, y, true_te = get_stress_data(n_samples=400, n_noise=20, seed=0)
     
     # 2. Initialize CTRL-DML Model
     print("Initializing CTRL-DML (MyDragonNet)...")
     model = MyDragonNet(
         n_unit_in=X.shape[1], 
-        n_iter=2000, 
-        batch_size=256,
+        n_iter=120, 
+        batch_size=128,
         lr=1e-3,
         val_split_prop=0.0 # Disable validation split
     )

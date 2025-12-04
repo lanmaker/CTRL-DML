@@ -7,8 +7,10 @@ import matplotlib.pyplot as plt
 
 from econml.dml import CausalForestDML
 from sklearn.linear_model import LassoCV, LogisticRegressionCV
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import CountVectorizer
 
-from data_multimodal import get_multimodal_data, convert_text_to_tfidf
+from data_multimodal import get_multimodal_data
 from model_multimodal import MultimodalCTRL
 
 
@@ -34,12 +36,38 @@ def run_once(
     set_seed(seed)
     print(f"Generating Multimodal Data (p_noise={p_noise})...")
     X_tab, X_text, Y, T, true_te = get_multimodal_data(n=n_samples, vocab_size=vocab_size, p_noise=p_noise)
+    (
+        X_tab_train,
+        X_tab_test,
+        X_text_train,
+        X_text_test,
+        Y_train,
+        Y_test,
+        T_train,
+        T_test,
+        te_train,
+        te_test,
+    ) = train_test_split(
+        X_tab,
+        X_text,
+        Y,
+        T,
+        true_te,
+        test_size=0.2,
+        random_state=seed,
+        stratify=T,
+    )
 
     pehe_cf = None
     if run_cf:
         print("Running Causal Forest (Baseline)...")
-        X_tfidf = convert_text_to_tfidf(X_text, vocab_size)
-        X_combined = np.concatenate([X_tab, X_tfidf], axis=1)
+        vectorizer = CountVectorizer(max_features=vocab_size)
+        corpus_train = [" ".join(map(str, row)) for row in X_text_train]
+        corpus_test = [" ".join(map(str, row)) for row in X_text_test]
+        X_tfidf_train = vectorizer.fit_transform(corpus_train).toarray()
+        X_tfidf_test = vectorizer.transform(corpus_test).toarray()
+        X_combined_train = np.concatenate([X_tab_train, X_tfidf_train], axis=1)
+        X_combined_test = np.concatenate([X_tab_test, X_tfidf_test], axis=1)
         est = CausalForestDML(
             model_y=LassoCV(),
             model_t=LogisticRegressionCV(max_iter=1000),
@@ -47,16 +75,16 @@ def run_once(
             discrete_treatment=True,
             random_state=seed,
         )
-        est.fit(Y, T, X=X_combined)
-        pred_cf = est.effect(X_combined).flatten()
-        pehe_cf = float(np.sqrt(np.mean((true_te - pred_cf) ** 2)))
+        est.fit(Y_train, T_train, X=X_combined_train)
+        pred_cf = est.effect(X_combined_test).flatten()
+        pehe_cf = float(np.sqrt(np.mean((te_test - pred_cf) ** 2)))
         print(f"Causal Forest PEHE: {pehe_cf:.4f}")
 
     print("Running Multimodal CTRL-DML (Ours)...")
-    xt_tab = torch.from_numpy(X_tab).float()
-    xt_text = torch.from_numpy(X_text).long()
-    yt = torch.from_numpy(Y).float().unsqueeze(1)
-    tt = torch.from_numpy(T).float().unsqueeze(1)
+    xt_tab = torch.from_numpy(X_tab_train).float()
+    xt_text = torch.from_numpy(X_text_train).long()
+    yt = torch.from_numpy(Y_train).float().unsqueeze(1)
+    tt = torch.from_numpy(T_train).float().unsqueeze(1)
 
     model = MultimodalCTRL(n_tab_input=10, vocab_size=vocab_size, embed_dim=embed_dim, fusion=fusion)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -75,10 +103,10 @@ def run_once(
 
     model.eval()
     with torch.no_grad():
-        y0, y1, _ = model(xt_tab, xt_text)
+        y0, y1, _ = model(torch.from_numpy(X_tab_test).float(), torch.from_numpy(X_text_test).long())
         pred_ours = (y1 - y0).cpu().numpy().flatten()
-    pehe_ours = float(np.sqrt(np.mean((true_te - pred_ours) ** 2)))
-    print(f"Multimodal CTRL-DML PEHE: {pehe_ours:.4f}")
+    pehe_ours = float(np.sqrt(np.mean((te_test - pred_ours) ** 2)))
+    print(f"Multimodal CTRL-DML PEHE (held-out): {pehe_ours:.4f}")
     return pehe_cf, pehe_ours
 
 

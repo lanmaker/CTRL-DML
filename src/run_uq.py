@@ -144,15 +144,27 @@ def main():
     mc_upper = mc_mean + 1.96 * total_std
 
     # Conformalized intervals using a calibration split from the test fold
-    cal_size = len(te_test) // 4
-    cal_mean, cal_true = mc_mean[:cal_size], te_test[:cal_size]
-    q = conformalize(cal_mean, cal_true, alpha=args.alpha)
+    cal_size = max(1, min(len(te_test) // 4, len(te_test) - 1))
+    cal_idx = slice(0, cal_size)
+    eval_idx = slice(cal_size, len(te_test))
+    te_cal, te_eval = te_test[cal_idx], te_test[eval_idx]
+    mc_mean_cal = mc_mean[cal_idx]
+    mc_mean_eval = mc_mean[eval_idx]
+    mc_lower_eval = mc_lower[eval_idx]
+    mc_upper_eval = mc_upper[eval_idx]
+    q = conformalize(mc_mean_cal, te_cal, alpha=args.alpha)
     conf_lower = mc_mean - q
     conf_upper = mc_mean + q
+    conf_lower_eval = conf_lower[eval_idx]
+    conf_upper_eval = conf_upper[eval_idx]
 
-    # Coverage metrics
-    mc_cover = float(np.mean((te_test >= mc_lower) & (te_test <= mc_upper)))
-    conf_cover = float(np.mean((te_test >= conf_lower) & (te_test <= conf_upper)))
+    # Coverage metrics on the held-out evaluation split
+    if len(te_eval) == 0:
+        mc_cover = float("nan")
+        conf_cover = float("nan")
+    else:
+        mc_cover = float(np.mean((te_eval >= mc_lower_eval) & (te_eval <= mc_upper_eval)))
+        conf_cover = float(np.mean((te_eval >= conf_lower_eval) & (te_eval <= conf_upper_eval)))
     ensemble_cover = mc_cover if args.n_ensemble > 1 else None
     print(
         f"Coverage | MC Dropout (ensemble={args.n_ensemble}): {mc_cover:.3f} | "
@@ -160,12 +172,12 @@ def main():
     )
 
     mc_width, conf_width = plot_intervals(
-        te_test,
-        mc_mean,
-        mc_lower,
-        mc_upper,
-        conf_lower,
-        conf_upper,
+        te_eval,
+        mc_mean_eval,
+        mc_lower_eval,
+        mc_upper_eval,
+        conf_lower_eval,
+        conf_upper_eval,
         mc_cover,
         conf_cover,
         filename="uq_conformal.pdf",
@@ -188,7 +200,8 @@ def main():
         "conf_coverage": conf_cover,
         "mc_width": mc_width,
         "conf_width": conf_width,
-        "cal_size": len(te_test) // 4,
+        "cal_size": cal_size,
+        "eval_size": len(te_eval),
     }
     out = pd.DataFrame([metrics])
     out.to_csv(args.metrics_csv, index=False)

@@ -145,16 +145,20 @@ class MyDragonNet(BasicDragonNet):
         X: Input data (numpy array or tensor)
         n_runs: Number of forward passes
         """
-        # 1. Force train mode to enable Dropout
-        self.train() 
-        
+        # Keep BatchNorm frozen (eval mode) while enabling dropout only.
+        original_mode = self.training
+        self.eval()
+        dropout_layers = [m for m in self.modules() if isinstance(m, nn.Dropout)]
+        for layer in dropout_layers:
+            layer.train(True)
+
         # Handle input
         if isinstance(X, np.ndarray):
             X = torch.from_numpy(X).float().to(DEVICE)
-        
+
         # 2. Multiple forward passes
         preds_cate = []
-        
+
         with torch.no_grad(): # No gradients needed for inference
             for _ in range(n_runs):
                 # Manual forward pass through our components
@@ -166,8 +170,8 @@ class MyDragonNet(BasicDragonNet):
                 cate = y1_preds - y0_preds
                 preds_cate.append(cate.cpu().numpy())
         
-        # 3. Restore eval mode
-        self.eval()
+        # 3. Restore original training/eval state
+        self.train(original_mode)
         
         # 4. Statistical analysis
         preds_cate = np.array(preds_cate) # shape: (n_runs, n_samples)
