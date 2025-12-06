@@ -185,70 +185,152 @@ def run_noise_robustness_benchmark(args):
 def run_ihdp_benchmark(args):
     print("\n>>> Running IHDP Benchmark")
     n_exp = 10 if FAST_RUN else 100
-    mses = []
+    
+    # Store results
+    results = {
+        "DragonNet": [],
+        "CausalForest": [],
+        "CTRL-DML": []
+    }
     
     for i in range(1, n_exp + 1):
         try:
             # load() returns: X, w, y, pot_y, X_test, pot_y_test
             # pot_y is (n, 2), true CATE is pot_y[:,1] - pot_y[:,0]
             X, T, y, _, X_test, pot_y_test = load_ihdp(args.data_path, exp=i)
+            # Fix shapes for baselines if needed. T is (N, 1) usually from load
+            T = T.squeeze() if T.ndim > 1 else T
+            y = y.squeeze() if y.ndim > 1 else y
+            
             true_te_test = pot_y_test[:, 1] - pot_y_test[:, 0]
             
-            # Using only standard training set to keep it simple, evaluating on test set
+            # 1. DragonNet
+            m_base = StandardDragonNet(n_unit_in=X.shape[1], n_iter=DRAGON_ITERS, batch_size=256)
+            m_base.fit(X, y, T)
+            p_base_tensor = m_base.predict(torch.from_numpy(X_test).float().to(DEVICE))
+            p_base = p_base_tensor.cpu().detach().numpy().flatten()
+            pehe_dragon = np.sqrt(np.mean((true_te_test - p_base)**2))
+            results["DragonNet"].append(pehe_dragon)
+            
+            # 2. Causal Forest
+            est = CausalForestDML(model_y=LassoCV(), model_t=LogisticRegressionCV(max_iter=1000), 
+                                  n_estimators=CF_TREES, discrete_treatment=True, random_state=42)
+            est.fit(y, T, X=X)
+            p_cf = est.effect(X_test).flatten()
+            pehe_cf = np.sqrt(np.mean((true_te_test - p_cf)**2))
+            results["CausalForest"].append(pehe_cf)
+            
+            # 3. CTRL-DML (Ours)
             m_ours = train_ctrl_dml(X, y, T)
             m_ours.eval()
             with torch.no_grad():
                 pred_ours_tensor = m_ours.predict(torch.from_numpy(X_test).float().to(DEVICE))
                 p_ours = pred_ours_tensor.cpu().detach().numpy().flatten()
             
-            pehe = np.sqrt(np.mean((true_te_test - p_ours)**2))
-            mses.append(pehe)
+            pehe_ours = np.sqrt(np.mean((true_te_test - p_ours)**2))
+            results["CTRL-DML"].append(pehe_ours)
+            
             if i % 10 == 0 or i == 1:
-                print(f"Exp {i}/{n_exp}: PEHE = {pehe:.4f}")
+                print(f"Exp {i}/{n_exp}: Dragon={pehe_dragon:.3f} | CF={pehe_cf:.3f} | Ours={pehe_ours:.3f}")
         except Exception as e:
             print(f"Error in Exp {i}: {e}")
 
-    print(f"IHDP Result: Mean PEHE = {np.mean(mses):.4f} +/- {np.std(mses):.4f}")
+    # Summary
+    print("\nIHDP Results Summary:")
+    for method, res in results.items():
+        print(f"{method}: {np.mean(res):.4f} +/- {np.std(res):.4f}")
+        
+    # Plotting Boxplot
+    plt.figure(figsize=(8, 6))
+    data = [results["DragonNet"], results["CausalForest"], results["CTRL-DML"]]
+    labels = ["DragonNet", "Causal Forest", "CTRL-DML"]
+    colors = ['#d62728', '#1f77b4', '#2ca02c']
+    
+    bplot = plt.boxplot(data, patch_artist=True, labels=labels, showfliers=False)
+    for patch, color in zip(bplot['boxes'], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
+        
+    plt.ylabel("PEHE Error")
+    plt.title("IHDP Benchmark (100 Experiments)")
+    plt.grid(True, alpha=0.3)
+    out_file = "benchmark_ihdp.pdf"
+    plt.savefig(out_file, dpi=300)
+    print(f"Saved plot to {out_file}")
 
 def run_acic_benchmark(args):
     print("\n>>> Running ACIC2016 Benchmark")
-    # ACIC has many simulations. We'll pick a few characteristic ones if not specified.
-    # Currently just running simulation 1 for demonstration if not iterating all.
-    # ACIC simulation files are complicated, using 'load' defaults to downloading preprocessed.
-    
-    # We will loop through 10 simulations for robustness check
     n_sims = 5 if FAST_RUN else 20
-    mses_ours = []
+    
+    results = {
+        "DragonNet": [],
+        "CausalForest": [],
+        "CTRL-DML": []
+    }
     
     for i in range(1, n_sims + 1):
         try:
-            # load() returns train/test splits derived from simulation
-            # Note: setting 'exp' might be simulated by seeding in preprocess_simu within load?
-            # Actually catenets ACIC loader is a bit complex. 
-            # We will use 'preprocess_simu' mode (default) with different seeds (i)
-            # load(data_path, i_exp=i) is not standard signature for acic loader in this repo, 
-            # checking signature... it uses kwargs passed to preprocess.
-            # preprocess_simu takes 'i_exp'.
-            
-            # Signature: load(data_path, preprocessed=True, original_acic_outcomes=False, i_exp=...)
-            # Returns: X, w, y, pot_y, X_test, pot_y_test
             X, T, y, _, X_test, pot_y_test = load_acic(args.data_path, i_exp=i)
+            # Fix shapes
+            T = T.squeeze() if T.ndim > 1 else T
+            y = y.squeeze() if y.ndim > 1 else y
+            
             true_te_test = pot_y_test[:, 1] - pot_y_test[:, 0]
             
+            # 1. DragonNet
+            m_base = StandardDragonNet(n_unit_in=X.shape[1], n_iter=DRAGON_ITERS, batch_size=256)
+            m_base.fit(X, y, T)
+            p_base_tensor = m_base.predict(torch.from_numpy(X_test).float().to(DEVICE))
+            p_base = p_base_tensor.cpu().detach().numpy().flatten()
+            pehe_dragon = np.sqrt(np.mean((true_te_test - p_base)**2))
+            results["DragonNet"].append(pehe_dragon)
+            
+            # 2. Causal Forest
+            est = CausalForestDML(model_y=LassoCV(), model_t=LogisticRegressionCV(max_iter=1000), 
+                                  n_estimators=CF_TREES, discrete_treatment=True, random_state=42)
+            est.fit(y, T, X=X)
+            p_cf = est.effect(X_test).flatten()
+            pehe_cf = np.sqrt(np.mean((true_te_test - p_cf)**2))
+            results["CausalForest"].append(pehe_cf)
+            
+            # 3. CTRL-DML
             m_ours = train_ctrl_dml(X, y, T)
             m_ours.eval()
             with torch.no_grad():
                 pred_ours_tensor = m_ours.predict(torch.from_numpy(X_test).float().to(DEVICE))
                 p_ours = pred_ours_tensor.cpu().detach().numpy().flatten()
+            pehe_ours = np.sqrt(np.mean((true_te_test - p_ours)**2))
+            results["CTRL-DML"].append(pehe_ours)
             
-            pehe = np.sqrt(np.mean((true_te_test - p_ours)**2))
-            mses_ours.append(pehe)
-            print(f"Sim {i}/{n_sims}: PEHE = {pehe:.4f}")
+            print(f"Sim {i}/{n_sims}: Dragon={pehe_dragon:.3f} | CF={pehe_cf:.3f} | Ours={pehe_ours:.3f}")
 
         except Exception as e:
             print(f"Error in Sim {i}: {e}")
             
-    print(f"ACIC2016 Result: Mean PEHE = {np.mean(mses_ours):.4f} +/- {np.std(mses_ours):.4f}")
+    # Summary
+    print("\nACIC Results Summary:")
+    for method, res in results.items():
+        if len(res) > 0:
+            print(f"{method}: {np.mean(res):.4f} +/- {np.std(res):.4f}")
+        
+    # Plotting Boxplot (if we have data)
+    if len(results["CTRL-DML"]) > 0:
+        plt.figure(figsize=(8, 6))
+        data = [results["DragonNet"], results["CausalForest"], results["CTRL-DML"]]
+        labels = ["DragonNet", "Causal Forest", "CTRL-DML"]
+        colors = ['#d62728', '#1f77b4', '#2ca02c']
+        
+        bplot = plt.boxplot(data, patch_artist=True, labels=labels, showfliers=False)
+        for patch, color in zip(bplot['boxes'], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.6)
+            
+        plt.ylabel("PEHE Error")
+        plt.title("ACIC2016 Benchmark (Results over Simulation Set)")
+        plt.grid(True, alpha=0.3)
+        out_file = "benchmark_acic.pdf"
+        plt.savefig(out_file, dpi=300)
+        print(f"Saved plot to {out_file}")
 
 def run_twins_benchmark(args):
     print("\n>>> Running Twins Benchmark")
@@ -256,23 +338,78 @@ def run_twins_benchmark(args):
     # load() returns X_train, w_train, y_train, pot_y_train, X_test, pot_y_test
     # Default train_ratio=0.8
     seeds = [42, 1024, 7] if not FAST_RUN else [42]
-    mses = []
+    
+    results = {
+        "DragonNet": [],
+        "Causal Forest": [],
+        "CTRL-DML": []
+    }
     
     for s in seeds:
         X, T, y, _, X_test, pot_y_test = load_twins(args.data_path, seed=s, train_ratio=0.8)
+        # Fix shapes
+        T = T.squeeze() if T.ndim > 1 else T
+        y = y.squeeze() if y.ndim > 1 else y
+        
         true_te_test = pot_y_test[:, 1] - pot_y_test[:, 0]
         
+        # 1. DragonNet
+        m_base = StandardDragonNet(n_unit_in=X.shape[1], n_iter=DRAGON_ITERS, batch_size=256)
+        m_base.fit(X, y, T)
+        p_base_tensor = m_base.predict(torch.from_numpy(X_test).float().to(DEVICE))
+        p_base = p_base_tensor.cpu().detach().numpy().flatten()
+        pehe_dragon = np.sqrt(np.mean((true_te_test - p_base)**2))
+        results["DragonNet"].append(pehe_dragon)
+        
+        # 2. Causal Forest
+        est = CausalForestDML(model_y=LassoCV(), model_t=LogisticRegressionCV(max_iter=1000), 
+                              n_estimators=CF_TREES, discrete_treatment=True, random_state=s)
+        est.fit(y, T, X=X)
+        p_cf = est.effect(X_test).flatten()
+        pehe_cf = np.sqrt(np.mean((true_te_test - p_cf)**2))
+        results["Causal Forest"].append(pehe_cf)
+        
+        # 3. CTRL-DML
         m_ours = train_ctrl_dml(X, y, T)
         m_ours.eval()
         with torch.no_grad():
             pred_ours_tensor = m_ours.predict(torch.from_numpy(X_test).float().to(DEVICE))
             p_ours = pred_ours_tensor.cpu().detach().numpy().flatten()
         
-        pehe = np.sqrt(np.mean((true_te_test - p_ours)**2))
-        mses.append(pehe)
-        print(f"Seed {s}: PEHE = {pehe:.4f}")
+        pehe_ours = np.sqrt(np.mean((true_te_test - p_ours)**2))
+        results["CTRL-DML"].append(pehe_ours)
+        print(f"Seed {s}: Dragon={pehe_dragon:.4f} | CF={pehe_cf:.4f} | Ours={pehe_ours:.4f}")
         
-    print(f"Twins Result: Mean PEHE = {np.mean(mses):.4f} +/- {np.std(mses):.4f}")
+    print("\nTwins Results Summary:")
+    means = []
+    stds = []
+    names = ["DragonNet", "Causal Forest", "CTRL-DML"]
+    colors = ['#d62728', '#1f77b4', '#2ca02c']
+    
+    for name in names:
+        res = results[name]
+        m, s_dev = np.mean(res), np.std(res)
+        print(f"{name}: {m:.4f} +/- {s_dev:.4f}")
+        means.append(m)
+        stds.append(s_dev)
+
+    # Plotting Bar Chart
+    plt.figure(figsize=(8, 6))
+    
+    x_pos = np.arange(len(names))
+    plt.bar(x_pos, means, yerr=stds, align='center', alpha=0.7, color=colors, capsize=10, width=0.6)
+    plt.ylabel('PEHE Error')
+    plt.xticks(x_pos, names)
+    plt.title('Twins Benchmark (Performance across Seeds)')
+    plt.grid(True, axis='y', alpha=0.3)
+    
+    # Add labels on bars
+    for i, v in enumerate(means):
+        plt.text(i, v + 0.005, f"{v:.3f}", ha='center', fontweight='bold')
+    
+    out_file = "benchmark_twins.pdf"
+    plt.savefig(out_file, dpi=300)
+    print(f"Saved plot to {out_file}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CTRL-DML Final Benchmark Suite")

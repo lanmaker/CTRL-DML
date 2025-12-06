@@ -1,0 +1,11 @@
+
+>>> Running Twins Benchmark
+Seed 42: Dragon=0.3561 | CF=0.3274 | Ours=0.3280
+Seed 1024: Dragon=0.3570 | CF=0.3241 | Ours=0.3260
+Seed 7: Dragon=0.3447 | CF=0.3118 | Ours=0.3155
+
+Twins Results Summary:
+DragonNet: 0.3526 +/- 0.0056
+Causal Forest: 0.3211 +/- 0.0067
+CTRL-DML: 0.3232 +/- 0.0055
+Saved plot to benchmark_twins.pdf

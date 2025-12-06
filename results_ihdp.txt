@@ -1,0 +1,19 @@
+
+>>> Running IHDP Benchmark
+Exp 1/100: Dragon=6.711 | CF=0.545 | Ours=1.351
+Exp 10/100: Dragon=12.662 | CF=5.847 | Ours=1.199
+Exp 20/100: Dragon=6.924 | CF=1.125 | Ours=1.246
+Exp 30/100: Dragon=9.590 | CF=1.719 | Ours=1.525
+Exp 40/100: Dragon=9.701 | CF=2.669 | Ours=1.651
+Exp 50/100: Dragon=8.058 | CF=1.580 | Ours=1.202
+Exp 60/100: Dragon=12.224 | CF=6.881 | Ours=2.007
+Exp 70/100: Dragon=6.253 | CF=0.273 | Ours=0.897
+Exp 80/100: Dragon=6.773 | CF=0.408 | Ours=1.053
+Exp 90/100: Dragon=9.252 | CF=1.337 | Ours=1.129
+Exp 100/100: Dragon=9.005 | CF=1.675 | Ours=1.125
+
+IHDP Results Summary:
+DragonNet: 10.7124 +/- 6.5606
+CausalForest: 3.8426 +/- 6.0591
+CTRL-DML: 1.8089 +/- 1.2713
+Saved plot to benchmark_ihdp.pdf

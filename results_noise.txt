@@ -1,0 +1,29 @@
+Starting final benchmark: DragonNet vs CausalForest vs CTRL-DML (Noise Robustness)
+
+>>> Noise level: 10
+   Seed 42 | Dragon: 12.82 | CF: 1.72 | Ours: 1.74
+   Seed 1024 | Dragon: 13.03 | CF: 2.12 | Ours: 1.96
+   Seed 2023 | Dragon: 12.56 | CF: 2.26 | Ours: 1.84
+   Seed 7 | Dragon: 12.34 | CF: 2.09 | Ours: 1.76
+   Seed 999 | Dragon: 12.62 | CF: 2.55 | Ours: 1.61
+
+>>> Noise level: 50
+   Seed 42 | Dragon: 9.87 | CF: 1.83 | Ours: 2.78
+   Seed 1024 | Dragon: 12.03 | CF: 1.75 | Ours: 2.39
+   Seed 2023 | Dragon: 11.47 | CF: 1.82 | Ours: 2.85
+   Seed 7 | Dragon: 11.49 | CF: 2.19 | Ours: 2.13
+   Seed 999 | Dragon: 11.25 | CF: 1.78 | Ours: 2.50
+
+>>> Noise level: 100
+   Seed 42 | Dragon: 11.55 | CF: 1.97 | Ours: 6.39
+   Seed 1024 | Dragon: 12.06 | CF: 1.77 | Ours: 5.12
+   Seed 2023 | Dragon: 11.69 | CF: 1.74 | Ours: 3.29
+   Seed 7 | Dragon: 11.92 | CF: 2.06 | Ours: 4.46
+   Seed 999 | Dragon: 12.25 | CF: 1.78 | Ours: 6.03
+
+Results saved to benchmark_final.pdf
+Delta view saved to benchmark_final_delta.pdf
+
+Interpretation guide:
+- Noise=10: Causal Forest may lead thanks to strong nonlinear splits with low noise.
+- Noise=100: CTRL-DML should stay competitive via sparsity when signal is sparse.
