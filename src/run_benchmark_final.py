@@ -1,12 +1,12 @@
+import os
+import argparse
+from pathlib import Path
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from torch import optim
 from torch.nn import functional as F
 from scipy.special import expit
-import os
-import argparse
-from pathlib import Path
 
 # === New challenger: EconML ===
 from econml.dml import CausalForestDML
@@ -260,7 +260,7 @@ def run_ihdp_benchmark(args):
 
 def run_acic_benchmark(args):
     print("\n>>> Running ACIC2016 Benchmark")
-    n_sims = 5 if FAST_RUN else 20
+    n_sims = args.n_sims if args.n_sims is not None else (5 if FAST_RUN else 20)
     
     results = {
         "DragonNet": [],
@@ -270,7 +270,16 @@ def run_acic_benchmark(args):
     
     for i in range(1, n_sims + 1):
         try:
-            X, T, y, _, X_test, pot_y_test = load_acic(args.data_path, i_exp=i)
+            (
+                X,
+                T,
+                y,
+                _,
+                X_test,
+                _,
+                _,
+                pot_y_test,
+            ) = load_acic(args.data_path, i_exp=i)
             # Fix shapes
             T = T.squeeze() if T.ndim > 1 else T
             y = y.squeeze() if y.ndim > 1 else y
@@ -416,6 +425,7 @@ if __name__ == "__main__":
     parser.add_argument("--benchmark", type=str, choices=["noise", "ihdp", "acic", "twins"], default="noise", help="Which benchmark to run")
     parser.add_argument("--data-path", type=str, default="./data", help="Path to store/load datasets")
     parser.add_argument("--fast-run", action="store_true", help="Enable fast run for debugging")
+    parser.add_argument("--n-sims", type=int, default=None, help="Override number of ACIC simulations to run")
     
     args = parser.parse_args()
     
