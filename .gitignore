@@ -48,3 +48,6 @@ ctrl_plugin_*.pt
 
 # Paper drafts (keep LaTeX out of git)
 /CTRL-DML-Paper/
+data/data_cf_all
+data/data_cf_all.tar.gz
+.git.broken/
