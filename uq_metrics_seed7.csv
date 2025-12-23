@@ -1,0 +1,2 @@
+n,n_noise,runs,dropout,alpha,n_ensemble,mc_coverage,conf_coverage,mc_width,conf_width,cal_size,eval_size
+2000,50,100,0.6,0.05,1,0.4033333333333333,0.9833333333333333,2.133186,5.5193105,100,300

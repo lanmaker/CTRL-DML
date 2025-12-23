@@ -17,9 +17,9 @@
 - White-box: feature-role plots separate confounders/instruments/noise.  
 - Robustness: stable PEHE as nuisance dimensions grow; orthogonal head degrades more gracefully when nuisances are weakened.  
 - Scaling: with noise=50, CTRL-DML stays ahead of CF as $N$ grows (multi-seed).  
-- Multimodal: dense text+tabular (and cross-attn) beat TF-IDF forests; orthogonal head stays competitive.  
+- Multimodal: dense text+tabular (and cross-attn) beat TF-IDF forests; sweep results now include multiple seeds.  
 - Public baselines: TWINS/ACIC loaders + baselines included; semi-synthetic Yelp text+tabular benchmark with ground-truth CATE.  
-**Reliability.** MC Dropout under-covers; conformal calibration restores nominal coverage (see `uq_conformal.pdf`, `uq_metrics.csv`).
+**Reliability.** MC Dropout under-covers; conformal calibration restores nominal coverage (see `uq_conformal.pdf`, `uq_metrics_multi.csv`).
 
 ---
 
@@ -29,8 +29,8 @@
 - **Scaling (noise=50):** N=500 CTRL-DML 1.56 ± 0.05 vs CF 2.21 ± 0.13; N=1000 CTRL-DML 1.53 ± 0.01 vs CF 2.00 ± 0.08; N=2000 CTRL-DML 1.53 ± 0.00 vs CF 1.94 ± 0.46 (`scaling_dml.csv`, `scaling_dml.pdf`).
 - **Nuisance misspecification:** Orthogonal head stays competitive when nuisance signal weakens (`nuisance_misspec.csv`, `nuisance_misspec.pdf`).
 - **Interpretability:** Feature gating suppresses noise (`feature_roles.pdf`).
-- **Boundary conditions:** Causal Forest wins at low noise and remains strong at noise=100 in current benchmark (`results_noise.txt`); ACIC fast-run (5 sims) shows CF best, CTRL-DML mid (`benchmark_acic.pdf`, `results_acic.txt`).
-- **Extensions:** Multimodal and UQ results are available but currently light on seeds (`multimodal_results.csv`, `uq_metrics.csv`).
+- **Boundary conditions:** Causal Forest wins at low noise and remains strong at noise=100 in current benchmark (`results_noise.txt`); ACIC fast-run (3 sims) shows CF best, CTRL-DML mid (`benchmark_acic.pdf`, `results_acic.txt`).
+- **Extensions:** Multimodal sweep now has multi-seed summary (n=2) (`multimodal_sweep_summary.csv`, `multimodal_sweep.pdf`); UQ now has a 2-seed summary (`uq_metrics_multi.csv`) but still limited.
 
 ---
 

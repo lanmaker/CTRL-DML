@@ -1,0 +1,11 @@
+
+>>> Running ACIC2016 Benchmark
+Sim 1/3: Dragon=3.460 | CF=0.277 | Ours=0.745
+Sim 2/3: Dragon=2.460 | CF=0.318 | Ours=0.710
+Sim 3/3: Dragon=2.492 | CF=0.281 | Ours=0.609
+
+ACIC Results Summary:
+DragonNet: 2.8042 +/- 0.4641
+CausalForest: 0.2920 +/- 0.0181
+CTRL-DML: 0.6880 +/- 0.0578
+Saved plot to benchmark_acic.pdf
