@@ -10,27 +10,27 @@
 
 ## Story Arc
 
-**Conflict.** Deep nets like DragonNet overfit noise; trees ignore unstructured text; DML can be unstable without care.  
+**Conflict.** Deep nets like DragonNet overfit noise; trees ignore unstructured text; DML can be unstable when nuisances are weak.  
 **Solution.** CTRL-DML makes DML a first-class citizen: sparse tabular attention, modular nuisances, and an orthogonal head (ratio targets + warm-start + clipping) with optional distillation.  
+**Claim.** In high-dimensional/weak-nuisance settings, the orthogonal head + sparsity yields more stable CATE than plug-in baselines.  
 **Evidence.**  
 - White-box: feature-role plots separate confounders/instruments/noise.  
 - Robustness: stable PEHE as nuisance dimensions grow; orthogonal head degrades more gracefully when nuisances are weakened.  
-- Scaling: with noise=50, CTRL-DML closes the gap and edges trees as $N$ grows.  
+- Scaling: with noise=50, CTRL-DML stays ahead of CF as $N$ grows (multi-seed).  
 - Multimodal: dense text+tabular (and cross-attn) beat TF-IDF forests; orthogonal head stays competitive.  
 - Public baselines: TWINS/ACIC loaders + baselines included; semi-synthetic Yelp text+tabular benchmark with ground-truth CATE.  
 **Reliability.** MC Dropout under-covers; conformal calibration restores nominal coverage (see `uq_conformal.pdf`, `uq_metrics.csv`).
 
 ---
 
-## Key Results
+## Key Results (Robustness Mainline)
 
-- **Interpretability:** Feature gating suppresses noise (see `feature_importance_sparse.pdf`, `feature_roles.pdf`).
-- **Robustness:** Stable PEHE as noise dimensions grow (see `robustness_solid.pdf`).
-- **Scaling law:** CTRL-DML vs CF across $N$ (see `scaling_dml.pdf`, `scaling_results.pdf`).
-- **Nuisance misspecification:** Orthogonal head is less sensitive when nuisances are weak (`nuisance_misspec.pdf`).
-- **Multimodal:** Dense and cross-attn text + tabular outperform TF-IDF trees (`multimodal_dml.pdf`, `multimodal_result.pdf`).
-- **Semi-synthetic real text+tabular:** Yelp-based benchmark with known CATE (`yelp_semisynth.pdf`).
-- **Reliability:** MC Dropout vs conformal intervals (`uq_conformal.pdf`, `uq_metrics.csv`).
+- **IHDP:** CTRL-DML PEHE 1.81 ± 1.27 vs CF 3.84 ± 6.06 (`results_ihdp.txt`).
+- **Scaling (noise=50):** N=500 CTRL-DML 1.56 ± 0.05 vs CF 2.21 ± 0.13; N=1000 CTRL-DML 1.53 ± 0.01 vs CF 2.00 ± 0.08 (`scaling_dml.csv`, `scaling_dml.pdf`).
+- **Nuisance misspecification:** Orthogonal head stays competitive when nuisance signal weakens (`nuisance_misspec.csv`, `nuisance_misspec.pdf`).
+- **Interpretability:** Feature gating suppresses noise (`feature_roles.pdf`).
+- **Boundary conditions:** Causal Forest wins at low noise and remains strong at noise=100 in current benchmark (`results_noise.txt`); ACIC fast-run (2 sims) shows CF best, CTRL-DML mid (`benchmark_acic.pdf`).
+- **Extensions:** Multimodal and UQ results are available but currently light on seeds (`multimodal_results.csv`, `uq_metrics.csv`).
 
 ---
 
