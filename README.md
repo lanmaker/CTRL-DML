@@ -26,10 +26,10 @@
 ## Key Results (Robustness Mainline)
 
 - **IHDP:** CTRL-DML PEHE 1.81 ± 1.27 vs CF 3.84 ± 6.06 (`results_ihdp.txt`).
-- **Scaling (noise=50):** N=500 CTRL-DML 1.56 ± 0.05 vs CF 2.21 ± 0.13; N=1000 CTRL-DML 1.53 ± 0.01 vs CF 2.00 ± 0.08 (`scaling_dml.csv`, `scaling_dml.pdf`).
+- **Scaling (noise=50):** N=500 CTRL-DML 1.56 ± 0.05 vs CF 2.21 ± 0.13; N=1000 CTRL-DML 1.53 ± 0.01 vs CF 2.00 ± 0.08; N=2000 CTRL-DML 1.53 ± 0.00 vs CF 1.94 ± 0.46 (`scaling_dml.csv`, `scaling_dml.pdf`).
 - **Nuisance misspecification:** Orthogonal head stays competitive when nuisance signal weakens (`nuisance_misspec.csv`, `nuisance_misspec.pdf`).
 - **Interpretability:** Feature gating suppresses noise (`feature_roles.pdf`).
-- **Boundary conditions:** Causal Forest wins at low noise and remains strong at noise=100 in current benchmark (`results_noise.txt`); ACIC fast-run (2 sims) shows CF best, CTRL-DML mid (`benchmark_acic.pdf`).
+- **Boundary conditions:** Causal Forest wins at low noise and remains strong at noise=100 in current benchmark (`results_noise.txt`); ACIC fast-run (5 sims) shows CF best, CTRL-DML mid (`benchmark_acic.pdf`, `results_acic.txt`).
 - **Extensions:** Multimodal and UQ results are available but currently light on seeds (`multimodal_results.csv`, `uq_metrics.csv`).
 
 ---
