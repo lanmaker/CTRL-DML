@@ -1,0 +1,180 @@
+% Auto-generated LaTeX macros for CTRL-DML results
+% DO NOT EDIT MANUALLY - regenerate using: python -m src.utils.latex
+% Generated: 2025-12-31 (Full Run)
+
+% === Ablation Results (3 seeds: 42, 1024, 2023, N=2000) ===
+\newcommand{\AblNoGatingDml}{4.59}
+\newcommand{\AblNoGatingPlugin}{1.63}
+\newcommand{\AblGatingDml}{8.78}
+\newcommand{\AblGatingPlugin}{1.64}
+\newcommand{\AblGatingLoneDml}{8.80}
+\newcommand{\AblGatingLonePlugin}{1.64}
+
+% === IHDP Benchmark (100 replicates) ===
+\newcommand{\IhdpTarnetPehe}{5.06}
+\newcommand{\IhdpTarnetStd}{9.39}
+\newcommand{\IhdpTarnetMedian}{1.44}
+\newcommand{\IhdpTarnetIqr}{1.67}
+\newcommand{\IhdpCfPehe}{3.64}
+\newcommand{\IhdpCfStd}{6.56}
+\newcommand{\IhdpCfMedian}{0.94}
+\newcommand{\IhdpCfIqr}{1.23}
+\newcommand{\IhdpCtrlPehe}{5.58}
+\newcommand{\IhdpCtrlStd}{8.23}
+\newcommand{\IhdpCtrlMedian}{2.57}
+\newcommand{\IhdpCtrlIqr}{3.21}
+\newcommand{\IhdpDmlPehe}{7.78}
+\newcommand{\IhdpDmlStd}{7.72}
+\newcommand{\IhdpDmlMedian}{4.67}
+\newcommand{\IhdpXgbPehe}{5.29}
+\newcommand{\IhdpXgbStd}{9.65}
+
+% === Scaling Results (N=500,1000,2000,5000, seeds=42,7,1024) ===
+\newcommand{\ScaleCfNFiveHundred}{1.92}
+\newcommand{\ScaleCtrlNFiveHundred}{1.58}
+\newcommand{\ScaleDmlNFiveHundred}{8.77}
+\newcommand{\ScaleCfNOneK}{1.72}
+\newcommand{\ScaleCtrlNOneK}{1.61}
+\newcommand{\ScaleDmlNOneK}{8.83}
+\newcommand{\ScaleCfNTwoK}{1.57}
+\newcommand{\ScaleCtrlNTwoK}{1.61}
+\newcommand{\ScaleDmlNTwoK}{8.78}
+\newcommand{\ScaleCfNFiveK}{1.48}
+\newcommand{\ScaleCtrlNFiveK}{1.57}
+\newcommand{\ScaleDmlNFiveK}{8.56}
+
+% === Nuisance Misspecification (3 seeds: 42, 7, 1024) ===
+\newcommand{\NuisPluginStrong}{1.61}
+\newcommand{\NuisPluginWeak}{1.61}
+\newcommand{\NuisDmlStrong}{8.78}
+\newcommand{\NuisDmlWeak}{8.46}
+
+% === Multimodal Results ===
+\newcommand{\MmCfPehe}{0.08}
+\newcommand{\MmCtrlBagPehe}{1.24}
+\newcommand{\MmCrossAttnPehe}{0.18}
+\newcommand{\MmBertTarnetPehe}{0.23}
+\newcommand{\MmBertCfPehe}{0.07}
+\newcommand{\MmDmlPehe}{1.24}
+\newcommand{\MmPluginPehe}{1.24}
+
+% Text-noise sweep (seeds=42,7)
+\newcommand{\MmNoiseZeroCtrl}{1.24}
+\newcommand{\MmNoiseThreeCtrl}{1.24}
+\newcommand{\MmNoiseSixCtrl}{1.24}
+\newcommand{\MmNoiseCfZero}{0.08}
+\newcommand{\MmNoiseCfThree}{0.62}
+\newcommand{\MmNoiseCfSix}{0.80}
+
+% === Uncertainty Quantification (100 MC runs, N=2000) ===
+\newcommand{\UqMcCov}{0.12}
+\newcommand{\UqMcWidth}{0.59}
+\newcommand{\UqConfCov}{0.95}
+\newcommand{\UqConfWidth}{6.61}
+
+% === Training Dynamics ===
+\newcommand{\DynConfWeight}{0.85}
+\newcommand{\DynInstWeight}{0.25}
+\newcommand{\DynNoiseWeight}{0.10}
+\newcommand{\DynDecayEpoch}{100}
+
+% === Feature Roles ===
+\newcommand{\FeatConfPrecTen}{0.50}
+\newcommand{\FeatInstPrecTen}{0.40}
+\newcommand{\FeatConfRecallTen}{1.0}
+
+% === Bias-Variance ===
+\newcommand{\BvPluginWithConf}{4.22}
+\newcommand{\BvOrthWithConf}{7.23}
+\newcommand{\BvPluginNoConf}{5.06}
+\newcommand{\BvOrthNoConf}{7.24}
+
+% === Training Parameters ===
+\newcommand{\ParamKFold}{3}
+\newcommand{\ParamNuisanceEpochs}{150}
+\newcommand{\ParamTauEpochs}{300}
+\newcommand{\ParamPluginEpochs}{220}
+\newcommand{\ParamDropout}{0.4}
+\newcommand{\ParamLambdaTau}{5\times10^{-4}}
+\newcommand{\ParamGradClip}{1.0}
+\newcommand{\ParamHiddenNuisance}{64}
+\newcommand{\ParamHiddenTau}{64}
+\newcommand{\ParamLrDml}{3\times10^{-4}}
+\newcommand{\ParamLrPlugin}{3\times10^{-3}}
+\newcommand{\ParamWClip}{0.05}
+\newcommand{\ParamZClip}{10}
+\newcommand{\ParamPropClipLo}{0.01}
+\newcommand{\ParamPropClipHi}{0.99}
+
+% === Lalonde Real Data ===
+\newcommand{\LalondeOlsAte}{1.55}
+\newcommand{\LalondeOlsCiLo}{-0.01}
+\newcommand{\LalondeOlsCiHi}{3.00}
+\newcommand{\LalondeOlsEval}{-}
+\newcommand{\LalondeCfAte}{0.59}
+\newcommand{\LalondeCfCiLo}{0.41}
+\newcommand{\LalondeCfCiHi}{0.75}
+\newcommand{\LalondeCfEval}{-}
+\newcommand{\LalondeDragonAte}{-0.99}
+\newcommand{\LalondeDragonCiLo}{-1.15}
+\newcommand{\LalondeDragonCiHi}{-0.84}
+\newcommand{\LalondeDragonEval}{-}
+\newcommand{\LalondeCtrlAte}{1.21}
+\newcommand{\LalondeCtrlCiLo}{0.84}
+\newcommand{\LalondeCtrlCiHi}{1.58}
+\newcommand{\LalondeCtrlEval}{-}
+\newcommand{\LalondeUnweightedSmd}{0.48}
+\newcommand{\LalondeUnweightedCount}{8}
+\newcommand{\LalondeDragonSmd}{0.15}
+\newcommand{\LalondeCtrlSmd}{0.15}
+
+% === STAR Real Data ===
+\newcommand{\StarOlsAte}{12.18}
+\newcommand{\StarOlsCiLo}{9.01}
+\newcommand{\StarOlsCiHi}{15.29}
+\newcommand{\StarOlsEval}{-}
+\newcommand{\StarCfAte}{12.67}
+\newcommand{\StarCfCiLo}{12.19}
+\newcommand{\StarCfCiHi}{13.12}
+\newcommand{\StarCfEval}{-}
+\newcommand{\StarDragonAte}{7.84}
+\newcommand{\StarDragonCiLo}{7.83}
+\newcommand{\StarDragonCiHi}{7.85}
+\newcommand{\StarDragonEval}{-}
+\newcommand{\StarCtrlAte}{2.59}
+\newcommand{\StarCtrlCiLo}{2.41}
+\newcommand{\StarCtrlCiHi}{2.77}
+\newcommand{\StarCtrlEval}{-}
+\newcommand{\StarUnweightedSmd}{0.12}
+\newcommand{\StarUnweightedCount}{3}
+\newcommand{\StarDragonSmd}{0.04}
+\newcommand{\StarCtrlSmd}{0.02}
+
+% === Amazon Real Data ===
+\newcommand{\AmazonCfAte}{0.15}
+\newcommand{\AmazonCfCiLo}{0.10}
+\newcommand{\AmazonCfCiHi}{0.20}
+\newcommand{\AmazonCtrlAte}{0.08}
+\newcommand{\AmazonCtrlCiLo}{0.05}
+\newcommand{\AmazonCtrlCiHi}{0.11}
+\newcommand{\AmazonUnweightedSmd}{0.35}
+\newcommand{\AmazonUnweightedCount}{5}
+\newcommand{\AmazonWeightedSmd}{0.12}
+\newcommand{\AmazonWeightedCount}{2}
+
+% === TWINS Benchmark ===
+\newcommand{\TwinsCfAte}{-0.035}
+\newcommand{\TwinsCfCiLo}{-0.036}
+\newcommand{\TwinsCfCiHi}{-0.034}
+\newcommand{\TwinsTarnetAte}{0.062}
+
+% === ACIC Benchmark ===
+\newcommand{\AcicCfAte}{0.133}
+\newcommand{\AcicCfCiLo}{0.125}
+\newcommand{\AcicCfCiHi}{0.140}
+\newcommand{\AcicTarnetAte}{0.061}
+
+% === Yelp Semi-synthetic ===
+\newcommand{\YelpCfPehe}{1.49}
+\newcommand{\YelpPluginPehe}{1.12}
+\newcommand{\YelpDmlPehe}{1.05}
