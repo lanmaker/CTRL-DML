@@ -26,11 +26,33 @@ CSV_URL = "https://raw.githubusercontent.com/AMLab-Amsterdam/CEVAE/master/datase
 NPZ_TRAIN_URL = "https://www.fredjo.com/files/ihdp_npci_1-100.train.npz"
 NPZ_TEST_URL = "https://www.fredjo.com/files/ihdp_npci_1-100.test.npz"
 
-# Cache directory
+# Local data directory (relative to project root)
+LOCAL_DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
+# Cache directory (fallback to temp)
 CACHE_DIR = Path(tempfile.gettempdir()) / "ihdp_cache"
 
 # Global cache for NPZ data
 _npz_cache = {"train": None, "test": None}
+
+
+def _find_npz_files() -> Tuple[Optional[Path], Optional[Path]]:
+    """Find NPZ files in local data dir or cache."""
+    # Check local data directory first
+    local_train = LOCAL_DATA_DIR / "ihdp_npci_1-100.train.npz"
+    local_test = LOCAL_DATA_DIR / "ihdp_npci_1-100.test.npz"
+
+    if local_train.exists() and local_test.exists():
+        return local_train, local_test
+
+    # Fallback to cache directory
+    cache_train = CACHE_DIR / "ihdp_train.npz"
+    cache_test = CACHE_DIR / "ihdp_test.npz"
+
+    if cache_train.exists() and cache_test.exists():
+        return cache_train, cache_test
+
+    return None, None
 
 
 def _download_npz():
@@ -40,19 +62,22 @@ def _download_npz():
     if _npz_cache["train"] is not None:
         return
 
-    CACHE_DIR.mkdir(exist_ok=True)
+    # Check for local files first
+    train_path, test_path = _find_npz_files()
 
-    train_path = CACHE_DIR / "ihdp_train.npz"
-    test_path = CACHE_DIR / "ihdp_test.npz"
+    if train_path is None or test_path is None:
+        # Need to download
+        CACHE_DIR.mkdir(exist_ok=True)
+        train_path = CACHE_DIR / "ihdp_train.npz"
+        test_path = CACHE_DIR / "ihdp_test.npz"
 
-    # Download if not cached
-    if not train_path.exists():
-        print("Downloading IHDP train data (100 replicates)...")
-        urllib.request.urlretrieve(NPZ_TRAIN_URL, train_path)
+        if not train_path.exists():
+            print("Downloading IHDP train data (100 replicates)...")
+            urllib.request.urlretrieve(NPZ_TRAIN_URL, train_path)
 
-    if not test_path.exists():
-        print("Downloading IHDP test data (100 replicates)...")
-        urllib.request.urlretrieve(NPZ_TEST_URL, test_path)
+        if not test_path.exists():
+            print("Downloading IHDP test data (100 replicates)...")
+            urllib.request.urlretrieve(NPZ_TEST_URL, test_path)
 
     # Load into cache
     _npz_cache["train"] = np.load(train_path)
@@ -63,23 +88,15 @@ def load_ihdp_replicate(rep: int = 1) -> pd.DataFrame:
     """
     Load a single IHDP semi-synthetic replicate with ground-truth potential outcomes.
 
+    Checks local data directory first, then downloads if necessary.
+
     Args:
         rep: Replicate number (1-100)
 
     Returns:
         DataFrame with columns: treatment, y_factual, y_cfactual, mu0, mu1, x1..x25, replicate
     """
-    if rep <= 10:
-        # Try CSV first for backwards compatibility
-        try:
-            df = pd.read_csv(CSV_URL.format(rep), header=None)
-            df.columns = COLUMNS
-            df["replicate"] = rep
-            return df
-        except Exception:
-            pass
-
-    # Use NPZ for rep > 10 or if CSV fails
+    # Use NPZ (local first, then download if needed)
     _download_npz()
 
     # NPZ format: 'x', 't', 'yf', 'ycf', 'mu0', 'mu1' with shape (n_samples, n_replicates)

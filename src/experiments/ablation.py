@@ -32,7 +32,7 @@ from src.models.orthogonal_learner import (
 )
 from src.utils.io import get_output_manager
 from src.utils.metrics import compute_pehe
-from src.utils.latex import df_to_latex_table, MacroGenerator
+from src.utils.latex import df_to_latex_table
 
 
 # Default hyperparameters
@@ -40,11 +40,11 @@ FAST_RUN = os.environ.get("CTRL_DML_FAST", "0") == "1"
 DEFAULT_N_SAMPLES = 1200 if FAST_RUN else 2000
 DEFAULT_EPOCHS_PLUGIN = 100 if FAST_RUN else 220
 DEFAULT_EPOCHS_NUISANCE = 90 if FAST_RUN else 150
-DEFAULT_EPOCHS_TAU = 180 if FAST_RUN else 300
+DEFAULT_EPOCHS_TAU = 180 if FAST_RUN else 360
 DEFAULT_BATCH_SIZE = 160 if FAST_RUN else 192
 DEFAULT_HIDDEN_DIM = 96 if FAST_RUN else 120
 DEFAULT_HIDDEN_TAU = 64 if FAST_RUN else 96
-DEFAULT_LAMBDA_TAU = 5e-4
+DEFAULT_LAMBDA_TAU = 5e-5
 
 
 @dataclass
@@ -64,23 +64,31 @@ ABLATION_VARIANTS = [
 
 
 def run_single_experiment(
-    X: np.ndarray,
-    y: np.ndarray,
-    T: np.ndarray,
-    true_te: np.ndarray,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    T_train: np.ndarray,
+    X_test: np.ndarray,
+    true_te_test: np.ndarray,
     variant: AblationVariant,
     seed: int,
     config: dict,
 ) -> dict:
     """
-    Run a single ablation experiment.
+    Run a single ablation experiment with separate train/test sets.
+
+    Args:
+        X_train, y_train, T_train: Training data
+        X_test, true_te_test: Test data (only need X and true CATE for evaluation)
+        variant: Ablation variant config
+        seed: Random seed
+        config: Hyperparameter config
 
     Returns:
         Dictionary with results
     """
-    # Stage 0: plug-in pretrain
+    # Stage 0: plug-in pretrain on training data
     plugin_model = train_plugin(
-        X, y, T,
+        X_train, y_train, T_train,
         use_gating=variant.use_gating,
         lambda_sparsity=variant.lambda_sparsity,
         seed=seed,
@@ -90,11 +98,13 @@ def run_single_experiment(
         epochs=config["plugin_epochs"],
         lr=config["plugin_lr"],
     )
-    tau_plugin = predict_tau_tarnet(plugin_model, X)
+    # Evaluate plugin on TEST set
+    tau_plugin_test = predict_tau_tarnet(plugin_model, X_test)
+    tau_plugin_train = predict_tau_tarnet(plugin_model, X_train)
 
-    # Stage 1: Cross-fit nuisances
+    # Stage 1: Cross-fit nuisances on training data
     m_hat, e_hat = cross_fit_nuisance(
-        X, y, T,
+        X_train, y_train, T_train,
         use_gating=variant.use_gating,
         lambda_sparsity=variant.lambda_sparsity,
         seed=seed,
@@ -105,17 +115,20 @@ def run_single_experiment(
         epochs=config["epochs_nuisance"],
     )
     e_hat = np.clip(e_hat, 0.01, 0.99)
-    R = y - m_hat
-    W = T - e_hat
+    R = y_train - m_hat
+    W = T_train - e_hat
 
-    if config["standardize_w"]:
-        Z, weights = stabilize_residuals(R, W, clip_w=config["clip_w"], z_clip=config["z_clip"])
-    else:
-        Z, weights = R, np.clip(W, -config["clip_w"], config["clip_w"]) ** 2
+    # Compute pseudo-outcomes
+    Z, weights = stabilize_residuals(
+        R, W,
+        w_clip=config["w_clip"],
+        z_clip=config["z_clip"],
+        eps=config["eps"]
+    )
 
-    # Stage 2: Orthogonal R-learner
+    # Stage 2: Orthogonal R-learner on training data
     tau_model = train_rlearner(
-        X, Z, weights,
+        X_train, Z, weights,
         use_gating=variant.use_gating,
         lambda_tau=config["lambda_tau"],
         seed=seed,
@@ -126,17 +139,18 @@ def run_single_experiment(
         lr=config["lr"],
         grad_clip=config["grad_clip"],
         warm_start_from=plugin_model,
-        teacher_tau=tau_plugin,
+        teacher_tau=tau_plugin_train,
         aux_beta_start=config["aux_beta_start"],
         aux_beta_end=config["aux_beta_end"],
         aux_decay_epochs=config["aux_decay_epochs"],
         freeze_backbone=config["freeze_backbone"],
     )
-    tau_pred = predict_tau_rlearner(tau_model, X)
+    # Evaluate DML on TEST set
+    tau_pred_test = predict_tau_rlearner(tau_model, X_test)
 
-    # Evaluate
-    pehe_orth = compute_pehe(tau_pred, true_te)
-    pehe_plugin = compute_pehe(tau_plugin, true_te)
+    # Evaluate on held-out test set
+    pehe_orth = compute_pehe(tau_pred_test, true_te_test)
+    pehe_plugin = compute_pehe(tau_plugin_test, true_te_test)
 
     return {
         "variant": variant.name,
@@ -164,15 +178,26 @@ def run_ablation(config: dict) -> pd.DataFrame:
         for seed in config["seeds"]:
             print(f"\n>>> Variant={variant.name}, seed={seed}")
 
-            # Generate data
-            X, T, y, true_te = get_stress_data(
+            # Generate TRAIN data
+            X_train, T_train, y_train, _ = get_stress_data(
                 n_samples=config["n_samples"],
                 n_noise=config["n_noise"],
                 seed=seed
             )
 
-            # Run experiment
-            result = run_single_experiment(X, y, T, true_te, variant, seed, config)
+            # Generate independent TEST data (different seed)
+            X_test, T_test, y_test, true_te_test = get_stress_data(
+                n_samples=config["n_samples"],
+                n_noise=config["n_noise"],
+                seed=seed + 10000
+            )
+
+            # Run experiment with separate train/test
+            result = run_single_experiment(
+                X_train, y_train, T_train,
+                X_test, true_te_test,
+                variant, seed, config
+            )
             print(f"PEHE | DML: {result['pehe_dml']:.3f} | Plug-in: {result['pehe_plugin']:.3f}")
             rows.append(result)
 
@@ -223,7 +248,7 @@ def plot_ablation(df: pd.DataFrame, output_path: Path):
 
 
 def generate_latex_assets(df: pd.DataFrame, output_manager):
-    """Generate LaTeX table and macros from results."""
+    """Generate LaTeX table from results."""
     # Summary table
     summary = summarize_results(df)
 
@@ -241,15 +266,7 @@ def generate_latex_assets(df: pd.DataFrame, output_manager):
         label="tab:ablation",
     )
 
-    # Generate macros
-    gen = MacroGenerator()
-    for _, row in summary.iterrows():
-        variant = row["variant"].replace("_", "").title().replace(" ", "")
-        gen.add(f"Abl{variant}Dml", row["pehe_dml_mean"], "Ablation Results")
-        gen.add(f"Abl{variant}Plugin", row["pehe_plugin_mean"], "Ablation Results")
-
-    # Add to global macros (will be merged later)
-    return gen
+    print("To regenerate LaTeX macros, run: python -m src.utils.latex")
 
 
 def main():
@@ -257,7 +274,7 @@ def main():
     parser.add_argument("--mode", choices=["train", "plot", "all"], default="all",
                         help="Run mode: train, plot, or all")
     parser.add_argument("--seeds", type=int, nargs="+",
-                        default=[42, 7] if FAST_RUN else [42, 1024, 2023])
+                        default=[42, 7] if FAST_RUN else [42, 7, 1024])
     parser.add_argument("--n-samples", type=int, default=DEFAULT_N_SAMPLES)
     parser.add_argument("--n-noise", type=int, default=50)
     parser.add_argument("--k-folds", type=int, default=3)
@@ -272,12 +289,18 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--plugin-lr", type=float, default=0.003)
     parser.add_argument("--grad-clip", type=float, default=1.0)
-    parser.add_argument("--clip-w", type=float, default=0.05)
-    parser.add_argument("--z-clip", type=float, default=10.0)
-    parser.add_argument("--aux-beta-start", type=float, default=0.1)
-    parser.add_argument("--aux-beta-end", type=float, default=0.0)
-    parser.add_argument("--aux-decay-epochs", type=int, default=50)
-    parser.add_argument("--standardize-w", action="store_true", default=True)
+    parser.add_argument("--w-clip", type=float, default=0.05,
+                        help="Minimum |W| for division stability")
+    parser.add_argument("--z-clip", type=float, default=5.0,
+                        help="Pseudo-outcome clipping")
+    parser.add_argument("--eps", type=float, default=0.05,
+                        help="Weight upper bound")
+    parser.add_argument("--aux-beta-start", type=float, default=0.8,
+                        help="Distillation weight start")
+    parser.add_argument("--aux-beta-end", type=float, default=0.3,
+                        help="Distillation weight end")
+    parser.add_argument("--aux-decay-epochs", type=int, default=180,
+                        help="Epochs for cosine decay")
     parser.add_argument("--freeze-backbone", action="store_true", default=False)
 
     args = parser.parse_args()
@@ -298,12 +321,12 @@ def main():
         "lr": args.lr,
         "plugin_lr": args.plugin_lr,
         "grad_clip": args.grad_clip,
-        "clip_w": args.clip_w,
+        "w_clip": args.w_clip,
         "z_clip": args.z_clip,
+        "eps": args.eps,
         "aux_beta_start": args.aux_beta_start,
         "aux_beta_end": args.aux_beta_end,
         "aux_decay_epochs": args.aux_decay_epochs,
-        "standardize_w": args.standardize_w,
         "freeze_backbone": args.freeze_backbone,
     }
 

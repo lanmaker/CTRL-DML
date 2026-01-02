@@ -12,6 +12,11 @@
 
 set -e  # Exit on error
 
+# Work around OpenMP shared-memory restrictions in constrained environments.
+export KMP_DISABLE_SHM=1
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+
 # Parse arguments
 FAST_FLAG=""
 if [[ "$1" == "--fast" ]]; then
@@ -45,8 +50,14 @@ run_experiment() {
 run_experiment "Ablation Study" \
     "python -m src.experiments.ablation --mode all"
 
+run_experiment "Cross-fitting Ablation" \
+    "python -m src.experiments.crossfit_ablation"
+
 run_experiment "IHDP/TWINS/ACIC Benchmarks" \
     "python -m src.experiments.benchmarks --dataset all"
+
+run_experiment "Public Benchmarks (TWINS/ACIC Baselines)" \
+    "python -m src.experiments.public_benchmarks"
 
 run_experiment "Feature Role Analysis" \
     "python -m src.experiments.feature_roles"
@@ -68,12 +79,25 @@ run_experiment "Nuisance Misspecification" \
 run_experiment "Bias-Variance Analysis" \
     "python -m src.experiments.robustness --test bias_variance"
 
+run_experiment "Noise Robustness Sweep" \
+    "python -m src.experiments.robustness_sweep"
+
 # Multimodal experiments
 run_experiment "Multimodal Benchmark" \
     "python -m src.experiments.multimodal --experiment benchmark"
 
 run_experiment "Multimodal Noise Sweep" \
     "python -m src.experiments.multimodal --experiment noise_sweep"
+
+run_experiment "Multimodal BERT Baselines" \
+    "python -m src.experiments.multimodal --experiment bert"
+
+run_experiment "Yelp Semi-synthetic" \
+    "python -m src.experiments.yelp_semisynth"
+
+# Sensitivity sweep
+run_experiment "Sensitivity Heatmap" \
+    "python -m src.experiments.sensitivity"
 
 # Real data (may fail if datasets not available)
 echo ""

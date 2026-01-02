@@ -232,24 +232,89 @@ def interval_width(ci_lower: np.ndarray, ci_upper: np.ndarray) -> float:
     return float(np.mean(ci_upper - ci_lower))
 
 
-def e_value(ate: float, ate_se: float) -> float:
+def e_value(
+    rr: float,
+    rr_ci_lower: float = None,
+    is_log_rr: bool = False
+) -> tuple:
     """
     Compute E-value for sensitivity analysis.
 
     The E-value is the minimum strength of unmeasured confounding
-    that would be needed to explain away the observed effect.
+    (on the risk ratio scale) that would be needed to explain away
+    the observed effect.
+
+    For a risk ratio RR >= 1:
+        E-value = RR + sqrt(RR * (RR - 1))
+
+    For RR < 1, we use 1/RR to compute the E-value.
 
     Args:
-        ate: Average treatment effect estimate
-        ate_se: Standard error of ATE
+        rr: Risk ratio (or log risk ratio if is_log_rr=True)
+        rr_ci_lower: Lower bound of confidence interval for RR
+                     (used to compute E-value for CI)
+        is_log_rr: If True, rr is on log scale and will be exponentiated
 
     Returns:
-        E-value
+        Tuple of (e_val_point, e_val_ci) where e_val_ci is None if
+        rr_ci_lower not provided
     """
-    # Point estimate E-value
-    rr = np.exp(np.abs(ate))  # Approximate risk ratio
-    e_val = rr + np.sqrt(rr * (rr - 1))
-    return e_val
+    if is_log_rr:
+        rr = np.exp(rr)
+        if rr_ci_lower is not None:
+            rr_ci_lower = np.exp(rr_ci_lower)
+
+    # E-value formula works for RR >= 1, so flip if needed
+    rr_use = rr if rr >= 1 else 1 / rr
+    e_val_point = rr_use + np.sqrt(rr_use * (rr_use - 1))
+
+    e_val_ci = None
+    if rr_ci_lower is not None:
+        # For CI, use the bound closer to 1
+        if rr >= 1:
+            rr_ci_use = max(rr_ci_lower, 1.0)  # If CI crosses 1, E-value = 1
+        else:
+            rr_ci_use = min(1 / rr_ci_lower, 1.0) if rr_ci_lower > 0 else 1.0
+
+        if rr_ci_use <= 1:
+            e_val_ci = 1.0  # CI crosses null, E-value is 1
+        else:
+            e_val_ci = rr_ci_use + np.sqrt(rr_ci_use * (rr_ci_use - 1))
+
+    return e_val_point, e_val_ci
+
+
+def ate_to_approximate_rr(
+    ate: float,
+    outcome_sd: float = 1.0,
+    baseline_risk: float = None
+) -> float:
+    """
+    Convert ATE to approximate risk ratio for E-value computation.
+
+    For continuous outcomes, uses Cohen's d approximation:
+        RR ≈ exp(0.91 * d) where d = ATE / outcome_sd
+
+    For binary outcomes with known baseline risk:
+        RR = (baseline_risk + ATE) / baseline_risk
+
+    Args:
+        ate: Average treatment effect
+        outcome_sd: Standard deviation of outcome (for continuous)
+        baseline_risk: Baseline risk for control group (for binary outcomes)
+
+    Returns:
+        Approximate risk ratio
+    """
+    if baseline_risk is not None:
+        # Binary outcome
+        p1 = np.clip(baseline_risk + ate, 0.001, 0.999)
+        p0 = np.clip(baseline_risk, 0.001, 0.999)
+        return p1 / p0
+    else:
+        # Continuous outcome - use Cohen's d approximation
+        d = ate / outcome_sd
+        return np.exp(0.91 * np.abs(d))
 
 
 def summarize_results(

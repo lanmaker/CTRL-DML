@@ -1,7 +1,11 @@
+"""
+Test DragonNet from catenets on IHDP dataset.
+
+This test demonstrates loading, training, and evaluation of the
+baseline DragonNet model using the catenets library.
+"""
 import sys
 import os
-import torch
-import numpy as np
 
 import torch
 import numpy as np
@@ -11,8 +15,8 @@ try:
     from catenets.datasets import load as load_dataset
 except ImportError as e:
     print(f"Import Error: {e}")
-    # Fallback to local import if installed in editable mode but not picked up
-    sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'external', 'CATENets'))
+    # Fallback to local import if installed in editable mode
+    sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'external', 'catenets'))
     try:
         from catenets.models.torch import DragonNet
         from catenets.datasets import load as load_dataset
@@ -20,9 +24,25 @@ except ImportError as e:
         print(f"Could not import catenets even after path fix: {e2}")
         sys.exit(1)
 
+
+def compute_pehe(cate_pred: np.ndarray, cate_true: np.ndarray) -> float:
+    """
+    Compute PEHE (Precision in Estimation of Heterogeneous Effects).
+
+    PEHE = sqrt(mean((cate_true - cate_pred)^2))
+
+    Args:
+        cate_pred: Predicted CATE values
+        cate_true: True CATE values
+
+    Returns:
+        PEHE score (lower is better)
+    """
+    return float(np.sqrt(np.mean((cate_true - cate_pred) ** 2)))
+
+
 def test_dragonnet():
     print("1. Loading IHDP dataset...")
-    # This might download data
     try:
         # load returns: X, w, y, potential_outcomes_train, X_test, potential_outcomes_test
         X_train, w_train, y_train, _, X_test, po_test = load_dataset("ihdp", train_ratio=0.8)
@@ -38,10 +58,10 @@ def test_dragonnet():
     print("2. Initializing DragonNet...")
     model = DragonNet(
         n_unit_in=X_train.shape[1],
-        n_iter=2000, 
-        batch_size=64, 
-        lr=1e-3, 
-        n_units_out_prop=100, 
+        n_iter=500,  # Reduced for faster testing
+        batch_size=64,
+        lr=1e-3,
+        n_units_out_prop=100,
         n_units_out=100,
         val_split_prop=0.0
     )
@@ -53,26 +73,31 @@ def test_dragonnet():
     # 4. Predict CATE
     print("4. Predicting CATE...")
     cate_pred = model.predict(X_test)
-    
+
     # 5. Calculate PEHE (Precision in Estimation of Heterogeneous Effect)
     # po_test is (N, 2) where [:, 0] is mu0 and [:, 1] is mu1
     mu0_test = po_test[:, 0]
     mu1_test = po_test[:, 1]
     cate_true = mu1_test - mu0_test
-    
+
     # cate_pred is tensor, convert to numpy
     if isinstance(cate_pred, torch.Tensor):
         cate_pred = cate_pred.detach().cpu().numpy().flatten()
-        
-    pehe = np.mean((cate_true - cate_pred) ** 2)
+
+    # Compute PEHE correctly (sqrt of MSE)
+    pehe = compute_pehe(cate_pred, cate_true)
+
     print("-" * 30)
     print(f"Baseline Performance (DragonNet on IHDP)")
-    print(f"PEHE Score: {pehe:.6f}")
+    print(f"PEHE Score: {pehe:.4f}")
     print("-" * 30)
 
     print(f"Prediction complete. First 5 CATE predictions: {cate_pred[:5]}")
     print(f"First 5 True CATE: {cate_true[:5]}")
     print("Success! CATENets is working.")
+
+    return pehe
+
 
 if __name__ == "__main__":
     test_dragonnet()

@@ -13,6 +13,24 @@ Preprocessing (matches DoWhy notebook):
 - Covariates X: shared parental/pregnancy/birth covariates (46 dims).
 
 Returns numpy arrays X, T, Y; no ground-truth CATE is available (observational).
+
+IMPORTANT: Duplicate X Issue
+-----------------------------
+Each twin pair generates TWO rows with IDENTICAL X values (one for heavy twin T=1,
+one for light twin T=0). This means:
+
+1. Each covariate vector X appears exactly twice in the dataset
+2. For each X, we observe BOTH Y(0) and Y(1) (the twin outcomes)
+3. This provides a special form of ground truth where ITE = Y(1) - Y(0) per pair
+
+This is BY DESIGN for the TWINS benchmark, as twins share parental/pregnancy
+covariates. However, users should be aware:
+- Standard overlap assumptions may not apply
+- The model sees the same X with different treatments
+- Evaluation should account for this paired structure
+
+For methods sensitive to covariate overlap, consider using only one twin per pair
+or adjusting the evaluation accordingly.
 """
 from __future__ import annotations
 
@@ -114,6 +132,42 @@ def load_twins(
     return X, T, Y
 
 
+def compute_twins_ite(Y: np.ndarray) -> np.ndarray:
+    """
+    Compute Individual Treatment Effects from TWINS paired structure.
+
+    Since TWINS data has paired rows (T=1 followed by T=0 for each twin pair),
+    we can compute ground truth ITE = Y(1) - Y(0).
+
+    Args:
+        Y: Outcome array from load_twins (length 2N for N twin pairs)
+
+    Returns:
+        ITE array of length N (one per twin pair)
+    """
+    n_pairs = len(Y) // 2
+    Y_treated = Y[0::2]    # Heavy twins (T=1)
+    Y_control = Y[1::2]    # Light twins (T=0)
+    return Y_treated - Y_control
+
+
+def compute_twins_pehe(tau_pred: np.ndarray, Y: np.ndarray) -> float:
+    """
+    Compute PEHE using TWINS paired ground truth.
+
+    Args:
+        tau_pred: Predicted CATE for treated twins (length N for N pairs)
+        Y: Outcome array from load_twins (length 2N)
+
+    Returns:
+        PEHE score (sqrt of MSE against paired ITE)
+    """
+    ite_true = compute_twins_ite(Y)
+    return float(np.sqrt(np.mean((tau_pred - ite_true) ** 2)))
+
+
 if __name__ == "__main__":
     X, T, Y = load_twins()
     print(f"Loaded TWINS expanded: X={X.shape}, T mean={T.mean():.3f}, Y mean={Y.mean():.3f}")
+    ite = compute_twins_ite(Y)
+    print(f"Computed ITE: mean={ite.mean():.4f}, std={ite.std():.4f}")

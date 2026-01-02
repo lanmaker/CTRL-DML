@@ -261,14 +261,19 @@ if CATENETS_AVAILABLE:
         def predict_with_uncertainty(
             self,
             X: np.ndarray,
-            n_runs: int = 50
+            n_runs: int = 50,
+            alpha: float = 0.05
         ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
             """
             MC Dropout for Uncertainty Quantification.
 
+            Uses percentile-based confidence intervals which are more appropriate
+            for potentially non-normal MC dropout distributions.
+
             Args:
                 X: Input data (numpy array or tensor)
                 n_runs: Number of forward passes
+                alpha: Significance level for CI (default 0.05 for 95% CI)
 
             Returns:
                 Tuple of (mean_cate, std_cate, lower_bound, upper_bound)
@@ -297,8 +302,9 @@ if CATENETS_AVAILABLE:
             preds_cate = np.array(preds_cate)
             mean_cate = preds_cate.mean(axis=0)
             std_cate = preds_cate.std(axis=0)
-            lower_bound = mean_cate - 1.96 * std_cate
-            upper_bound = mean_cate + 1.96 * std_cate
+            # Use percentiles for CI (more robust than mean +/- 1.96*std)
+            lower_bound = np.percentile(preds_cate, 100 * alpha / 2, axis=0)
+            upper_bound = np.percentile(preds_cate, 100 * (1 - alpha / 2), axis=0)
 
             return mean_cate, std_cate, lower_bound, upper_bound
 
@@ -318,11 +324,5 @@ else:
             raise ImportError("catenets package required for MyDragonNet. Install with: pip install catenets")
 
 
-# Convenience function to get device
-def get_device() -> torch.device:
-    """Get the best available device."""
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+# Re-export get_device from training utils for backward compatibility
+from src.utils.training import get_device

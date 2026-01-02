@@ -1,22 +1,25 @@
+"""Test CTRL-DML model (MyDragonNet)."""
 import numpy as np
 import torch
 
-from my_dragonnet import MyDragonNet
-from run_ablation import get_stress_data, set_seed
+from src.models.dragonnet import MyDragonNet
+from src.data.synthetic import get_stress_data
+from src.models.orthogonal_learner import set_seed
+
 
 def test_my_model():
     # 1. Generate synthetic stress data (no external file needed)
     set_seed(0)
     X, T, y, true_te = get_stress_data(n_samples=400, n_noise=20, seed=0)
-    
+
     # 2. Initialize CTRL-DML Model
     print("Initializing CTRL-DML (MyDragonNet)...")
     model = MyDragonNet(
-        n_unit_in=X.shape[1], 
-        n_iter=120, 
+        n_unit_in=X.shape[1],
+        n_iter=120,
         batch_size=128,
         lr=1e-3,
-        val_split_prop=0.0 # Disable validation split
+        val_split_prop=0.0  # Disable validation split
     )
 
     print("Surgery successful! Model initialized. Training CTRL-DML...")
@@ -25,15 +28,16 @@ def test_my_model():
     # 3. Evaluate
     print("Predicting CATE...")
     pred = model.predict(X)
-    
+
     if isinstance(pred, torch.Tensor):
         pred = pred.detach().cpu().numpy().flatten()
-        
+
     pehe = np.sqrt(np.mean((true_te - pred)**2))
     print("-" * 30)
     print(f"CTRL-DML Performance on Stress Data")
     print(f"PEHE Score: {pehe:.4f}")
     print("-" * 30)
+
 
 if __name__ == "__main__":
     test_my_model()

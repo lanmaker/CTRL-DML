@@ -16,8 +16,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
-from src.data.synthetic import get_stress_data
+from src.data.synthetic import get_stress_data, get_feature_roles
 from src.models.orthogonal_learner import (
     train_plugin,
     cross_fit_nuisance,
@@ -30,7 +31,6 @@ from src.models.orthogonal_learner import (
 )
 from src.utils.io import get_output_manager
 from src.utils.metrics import compute_pehe
-from src.utils.latex import MacroGenerator
 
 
 FAST_RUN = os.environ.get("CTRL_DML_FAST", "0") == "1"
@@ -87,10 +87,12 @@ def run_nuisance_misspecification(config: RobustnessConfig) -> pd.DataFrame:
             # Train plugin
             plugin_model = train_plugin(
                 X_train, y_train, T_train,
-                use_gating=True,
-                lambda_sparsity=0.05,
+                use_gating=ctrl_config.use_gating,
+                lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
+                dropout_p=ctrl_config.dropout_p,
                 hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
                 epochs=ctrl_config.plugin_epochs,
             )
             tau_plugin_test = predict_tau_tarnet(plugin_model, X_test)
@@ -99,10 +101,13 @@ def run_nuisance_misspecification(config: RobustnessConfig) -> pd.DataFrame:
             # Cross-fit nuisances
             m_hat, e_hat = cross_fit_nuisance(
                 X_train, y_train, T_train,
-                use_gating=True,
-                lambda_sparsity=0.05,
+                use_gating=ctrl_config.use_gating,
+                lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
+                k_folds=ctrl_config.k_folds,
+                dropout_p=ctrl_config.dropout_p,
                 hidden_dim=hidden,
+                batch_size=ctrl_config.batch_size,
                 epochs=epochs,
             )
             e_hat = np.clip(e_hat, 0.01, 0.99)
@@ -110,18 +115,25 @@ def run_nuisance_misspecification(config: RobustnessConfig) -> pd.DataFrame:
             # Compute pseudo-outcomes
             R = y_train - m_hat
             W = T_train - e_hat
-            Z, weights = stabilize_residuals(R, W)
+            Z, weights = stabilize_residuals(R, W, w_clip=ctrl_config.w_clip, z_clip=ctrl_config.z_clip, eps=ctrl_config.eps)
 
             # Train R-learner
             tau_model = train_rlearner(
                 X_train, Z, weights,
-                use_gating=True,
+                use_gating=ctrl_config.use_gating,
                 lambda_tau=ctrl_config.lambda_tau,
                 seed=seed,
+                dropout_p=ctrl_config.dropout_p,
                 hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
                 epochs=ctrl_config.tau_epochs,
+                lr=ctrl_config.lr_tau,
+                grad_clip=ctrl_config.grad_clip,
                 warm_start_from=plugin_model,
                 teacher_tau=tau_plugin_train,
+                aux_beta_start=ctrl_config.aux_beta_start,
+                aux_beta_end=ctrl_config.aux_beta_end,
+                aux_decay_epochs=ctrl_config.aux_decay_epochs,
             )
             tau_pred_test = predict_tau_rlearner(tau_model, X_test)
 
@@ -143,11 +155,12 @@ def run_nuisance_misspecification(config: RobustnessConfig) -> pd.DataFrame:
 
 def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
     """
-    Bias-variance decomposition experiment.
+    Missing-confounder stress test.
 
-    Compares plugin vs orthogonal estimators with/without confounders.
+    Compares plugin vs orthogonal estimators when confounders are present
+    versus removed from observed features (DGP unchanged).
     """
-    print("=== Bias-Variance Analysis ===")
+    print("=== Missing Confounders ===")
     rows = []
 
     ctrl_config = CTRLConfig()
@@ -160,29 +173,46 @@ def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
         print(f"  Seed {seed}...")
         set_seed(seed)
 
+        # Generate data with confounders present (DGP fixed).
+        X_train_full, T_train, y_train, _ = get_stress_data(
+            n_samples=config.n_samples,
+            n_noise=config.n_noise,
+            n_confounders=5,
+            seed=seed
+        )
+        X_test_full, _, _, true_te_test = get_stress_data(
+            n_samples=config.n_samples,
+            n_noise=config.n_noise,
+            n_confounders=5,
+            seed=seed + 10000
+        )
+
+        role_idx = get_feature_roles(
+            n_confounders=5,
+            n_instruments=5,
+            n_prognostic=5,
+            n_noise=config.n_noise,
+        )
+        conf_idx = role_idx["confounders"]
+
         for include_conf in [True, False]:
             conf_label = "with_conf" if include_conf else "no_conf"
-            n_conf = 5 if include_conf else 0
-
-            # Generate data
-            X_train, T_train, y_train, _ = get_stress_data(
-                n_samples=config.n_samples,
-                n_noise=config.n_noise,
-                n_confounders=n_conf,
-                seed=seed
-            )
-            X_test, _, _, true_te_test = get_stress_data(
-                n_samples=config.n_samples,
-                n_noise=config.n_noise,
-                n_confounders=n_conf,
-                seed=seed + 10000
-            )
+            if include_conf:
+                X_train = X_train_full
+                X_test = X_test_full
+            else:
+                X_train = np.delete(X_train_full, conf_idx, axis=1)
+                X_test = np.delete(X_test_full, conf_idx, axis=1)
 
             # Train plugin
             plugin_model = train_plugin(
                 X_train, y_train, T_train,
-                use_gating=True,
+                use_gating=ctrl_config.use_gating,
+                lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
                 epochs=ctrl_config.plugin_epochs,
             )
             tau_plugin = predict_tau_tarnet(plugin_model, X_test)
@@ -191,22 +221,36 @@ def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
             # Train DML
             m_hat, e_hat = cross_fit_nuisance(
                 X_train, y_train, T_train,
-                use_gating=True,
+                use_gating=ctrl_config.use_gating,
+                lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
+                k_folds=ctrl_config.k_folds,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_dim,
+                batch_size=ctrl_config.batch_size,
                 epochs=ctrl_config.nuisance_epochs,
             )
             e_hat = np.clip(e_hat, 0.01, 0.99)
             R = y_train - m_hat
             W = T_train - e_hat
-            Z, weights = stabilize_residuals(R, W)
+            Z, weights = stabilize_residuals(R, W, w_clip=ctrl_config.w_clip, z_clip=ctrl_config.z_clip, eps=ctrl_config.eps)
 
             tau_model = train_rlearner(
                 X_train, Z, weights,
-                use_gating=True,
+                use_gating=ctrl_config.use_gating,
+                lambda_tau=ctrl_config.lambda_tau,
                 seed=seed,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
                 epochs=ctrl_config.tau_epochs,
+                lr=ctrl_config.lr_tau,
+                grad_clip=ctrl_config.grad_clip,
                 warm_start_from=plugin_model,
                 teacher_tau=tau_plugin_train,
+                aux_beta_start=ctrl_config.aux_beta_start,
+                aux_beta_end=ctrl_config.aux_beta_end,
+                aux_decay_epochs=ctrl_config.aux_decay_epochs,
             )
             tau_dml = predict_tau_rlearner(tau_model, X_test)
 
@@ -233,23 +277,61 @@ def summarize_results(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
     return summary.reset_index()
 
 
-def generate_latex_macros(nuisance_df: pd.DataFrame, bv_df: pd.DataFrame, gen: MacroGenerator):
-    """Generate LaTeX macros from results."""
-    if nuisance_df is not None:
-        for strength in ["strong", "weak"]:
-            mask = nuisance_df["nuisance_strength"] == strength
-            suffix = strength.title()
-            gen.add(f"NuisPlugin{suffix}", nuisance_df.loc[mask, "pehe_plugin"].mean(),
-                    "Nuisance Misspecification")
-            gen.add(f"NuisDml{suffix}", nuisance_df.loc[mask, "pehe_dml"].mean(),
-                    "Nuisance Misspecification")
+def plot_nuisance_misspec(df: pd.DataFrame, output_path: Path) -> None:
+    """Plot nuisance misspecification results."""
+    summary = df.groupby("nuisance_strength")[["pehe_plugin", "pehe_dml"]].agg(["mean", "std"])
+    order = [c for c in ["strong", "weak"] if c in summary.index]
+    summary = summary.loc[order]
+    x = np.arange(len(summary.index))
+    width = 0.35
 
-    if bv_df is not None:
-        for conf in ["with_conf", "no_conf"]:
-            mask = bv_df["confounders"] == conf
-            suffix = "".join(w.title() for w in conf.split("_"))
-            gen.add(f"BvPlugin{suffix}", bv_df.loc[mask, "pehe_plugin"].mean(), "Bias-Variance")
-            gen.add(f"BvOrth{suffix}", bv_df.loc[mask, "pehe_dml"].mean(), "Bias-Variance")
+    fig, ax = plt.subplots(figsize=(5, 3.5))
+    ax.bar(x - width / 2, summary[("pehe_plugin", "mean")], width,
+           yerr=summary[("pehe_plugin", "std")], label="Plug-in", capsize=3)
+    ax.bar(x + width / 2, summary[("pehe_dml", "mean")], width,
+           yerr=summary[("pehe_dml", "std")], label="CTRL-DML", capsize=3)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(summary.index.tolist())
+    ax.set_ylabel("PEHE")
+    ax.set_title("Nuisance Misspecification")
+    ax.legend(frameon=False)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {output_path}")
+
+
+def plot_bias_variance(df: pd.DataFrame, output_path: Path) -> None:
+    """Plot missing-confounder results."""
+    summary = df.groupby("confounders")[["pehe_plugin", "pehe_dml"]].agg(["mean", "std"])
+    order = [c for c in ["with_conf", "no_conf"] if c in summary.index]
+    summary = summary.loc[order]
+    x = np.arange(len(summary.index))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(5, 3.5))
+    ax.bar(x - width / 2, summary[("pehe_plugin", "mean")], width,
+           yerr=summary[("pehe_plugin", "std")], label="Plug-in", capsize=3)
+    ax.bar(x + width / 2, summary[("pehe_dml", "mean")], width,
+           yerr=summary[("pehe_dml", "std")], label="CTRL-DML", capsize=3)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(["with confounders", "confounders dropped"])
+    ax.set_ylabel("PEHE")
+    ax.set_title("Missing Confounders")
+    ax.legend(frameon=False)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {output_path}")
+
+
+def print_latex_reminder():
+    """Print reminder to regenerate LaTeX macros."""
+    print("\nTo regenerate LaTeX macros, run: python -m src.utils.latex")
 
 
 def main():
@@ -267,10 +349,6 @@ def main():
     )
 
     output = get_output_manager()
-    gen = MacroGenerator()
-
-    nuisance_df = None
-    bv_df = None
 
     if args.test in ["nuisance", "all"]:
         nuisance_df = run_nuisance_misspecification(config)
@@ -279,6 +357,7 @@ def main():
         print(f"\nSaved: {csv_path}")
         print("\nNuisance Misspecification Summary:")
         print(summarize_results(nuisance_df, "nuisance_strength").to_string(index=False))
+        plot_nuisance_misspec(nuisance_df, output.figure_path("nuisance_misspec"))
 
     if args.test in ["bias_variance", "all"]:
         bv_df = run_bias_variance(config)
@@ -287,8 +366,9 @@ def main():
         print(f"\nSaved: {csv_path}")
         print("\nBias-Variance Summary:")
         print(summarize_results(bv_df, "confounders").to_string(index=False))
+        plot_bias_variance(bv_df, output.figure_path("bias_variance"))
 
-    generate_latex_macros(nuisance_df, bv_df, gen)
+    print_latex_reminder()
 
 
 if __name__ == "__main__":

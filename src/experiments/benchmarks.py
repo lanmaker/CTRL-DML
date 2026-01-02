@@ -31,7 +31,7 @@ from src.models.orthogonal_learner import (
 )
 from src.utils.metrics import compute_pehe, compute_ate, bootstrap_mean
 from src.utils.io import get_output_manager
-from src.utils.latex import df_to_latex_table, MacroGenerator
+from src.utils.latex import df_to_latex_table
 
 
 # Fast mode for quick testing
@@ -46,7 +46,7 @@ class BenchmarkConfig:
 
     def __post_init__(self):
         if self.seeds is None:
-            self.seeds = list(range(42, 42 + 3 if FAST_RUN else 5))
+            self.seeds = [42, 7] if FAST_RUN else [42, 7, 1024]
 
 
 def run_ihdp_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
@@ -59,7 +59,7 @@ def run_ihdp_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
     Returns:
         DataFrame with results per replicate
     """
-    print("=== IHDP Benchmark ===")
+    print("=== IHDP Benchmark ===", flush=True)
     rows = []
 
     ctrl_config = CTRLConfig()
@@ -70,7 +70,7 @@ def run_ihdp_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
 
     for rep in range(1, config.n_replicates + 1):
         for seed in config.seeds:
-            print(f"  Rep {rep}, seed {seed}...")
+            print(f"  Rep {rep}, seed {seed}...", flush=True)
             set_seed(seed)
 
             # Load data
@@ -253,16 +253,21 @@ def main():
         help="Which benchmark to run"
     )
     parser.add_argument("--n-replicates", type=int, default=10 if FAST_RUN else 100)
-    parser.add_argument("--n-seeds", type=int, default=3 if FAST_RUN else 5)
+    parser.add_argument("--n-seeds", type=int, default=None)
+    parser.add_argument("--seeds", type=int, nargs="+", default=None)
     parser.add_argument("--acic-kind", choices=["low", "high"], default="low")
     parser.add_argument("--acic-n-datasets", type=int, default=5)
 
     args = parser.parse_args()
 
     output = get_output_manager()
+    seeds = args.seeds
+    if seeds is None and args.n_seeds is not None:
+        seeds = list(range(42, 42 + args.n_seeds))
+
     config = BenchmarkConfig(
         n_replicates=args.n_replicates,
-        seeds=list(range(42, 42 + args.n_seeds)),
+        seeds=seeds,
     )
 
     all_results = []
@@ -289,22 +294,11 @@ def main():
         print("\nACIC Summary:")
         print(summarize_results(df_acic).to_string(index=False))
 
-    # Save per-dataset results (matching existing filenames)
-    if args.dataset in ["ihdp", "all"] and 'df_ihdp' in dir():
-        csv_path = output.csv_path("ihdp_benchmark_summary")
-        df_ihdp.to_csv(csv_path, index=False)
-        print(f"\nSaved: {csv_path}")
-
-    # Save TWINS/ACIC to public_benchmarks
-    public_results = []
-    if args.dataset in ["twins", "all"] and 'df_twins' in dir():
-        public_results.append(df_twins)
-    if args.dataset in ["acic", "all"] and 'df_acic' in dir():
-        public_results.append(df_acic)
-    if public_results:
-        df_public = pd.concat(public_results, ignore_index=True)
-        csv_path = output.csv_path("public_benchmarks")
-        df_public.to_csv(csv_path, index=False)
+    # Save all benchmark results to unified file
+    if all_results:
+        df_all = pd.concat(all_results, ignore_index=True)
+        csv_path = output.csv_path("benchmark_results")
+        df_all.to_csv(csv_path, index=False)
         print(f"\nSaved: {csv_path}")
 
     # Generate summary table

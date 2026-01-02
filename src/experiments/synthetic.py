@@ -34,7 +34,6 @@ from src.models.orthogonal_learner import (
 from src.models.dragonnet import MyDragonNet, get_device
 from src.utils.io import get_output_manager
 from src.utils.metrics import compute_pehe
-from src.utils.latex import MacroGenerator
 
 
 FAST_RUN = os.environ.get("CTRL_DML_FAST", "0") == "1"
@@ -84,11 +83,15 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
                 seed=seed + 10000
             )
 
-            # Train plugin (CF-style)
+            # Train plug-in (warm-start for DML).
             plugin_model = train_plugin(
                 X_train, y_train, T_train,
-                use_gating=True,
+                use_gating=ctrl_config.use_gating,
+                lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
                 epochs=ctrl_config.plugin_epochs,
             )
             tau_plugin = predict_tau_tarnet(plugin_model, X_test)
@@ -97,27 +100,50 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
             # Train DML (CTRL)
             m_hat, e_hat = cross_fit_nuisance(
                 X_train, y_train, T_train,
-                use_gating=True,
+                use_gating=ctrl_config.use_gating,
+                lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
+                k_folds=ctrl_config.k_folds,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_dim,
+                batch_size=ctrl_config.batch_size,
                 epochs=ctrl_config.nuisance_epochs,
             )
             e_hat = np.clip(e_hat, 0.01, 0.99)
             R = y_train - m_hat
             W = T_train - e_hat
-            Z, weights = stabilize_residuals(R, W)
+            Z, weights = stabilize_residuals(R, W, w_clip=ctrl_config.w_clip, z_clip=ctrl_config.z_clip, eps=ctrl_config.eps)
 
             tau_model = train_rlearner(
                 X_train, Z, weights,
-                use_gating=True,
+                use_gating=ctrl_config.use_gating,
+                lambda_tau=ctrl_config.lambda_tau,
                 seed=seed,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
                 epochs=ctrl_config.tau_epochs,
+                lr=ctrl_config.lr_tau,
+                grad_clip=ctrl_config.grad_clip,
                 warm_start_from=plugin_model,
                 teacher_tau=tau_plugin_train,
+                aux_beta_start=ctrl_config.aux_beta_start,
+                aux_beta_end=ctrl_config.aux_beta_end,
+                aux_decay_epochs=ctrl_config.aux_decay_epochs,
             )
             tau_dml = predict_tau_rlearner(tau_model, X_test)
 
-            pehe_cf = compute_pehe(tau_plugin, true_te_test)
             pehe_ctrl = compute_pehe(tau_dml, true_te_test)
+
+            # Causal Forest baseline.
+            try:
+                from econml.dml import CausalForestDML
+            except ImportError as exc:
+                raise ImportError("econml is required for the Causal Forest scaling baseline.") from exc
+            cf = CausalForestDML(n_estimators=200, random_state=seed)
+            cf.fit(y_train, T_train, X=X_train)
+            tau_cf = cf.effect(X_test)
+            pehe_cf = compute_pehe(tau_cf, true_te_test)
 
             rows.append({
                 "n_samples": n_samples,
@@ -159,11 +185,12 @@ def run_uq(config: SyntheticConfig, n_samples: int = 2000) -> pd.DataFrame:
         )
 
         # Train model with dropout for MC inference
-        model = MyDragonNet(
+        from src.models.dragonnet import TarNet
+        model = TarNet(
             input_dim=X_train.shape[1],
-            hidden_dim=ctrl_config.hidden_dim,
-            use_gating=True,
+            hidden=ctrl_config.hidden_dim,
             dropout_p=0.5,  # Higher dropout for UQ
+            use_gating=True,
         ).to(DEVICE)
 
         # Simple training loop
@@ -176,11 +203,9 @@ def run_uq(config: SyntheticConfig, n_samples: int = 2000) -> pd.DataFrame:
         for epoch in range(epochs):
             model.train()
             optimizer.zero_grad()
-            y0, y1, t_logit = model(X_t)
+            y0, y1 = model(X_t)
             y_pred = y0 * (1 - T_t.view(-1, 1)) + y1 * T_t.view(-1, 1)
-            loss_y = ((y_pred.squeeze() - y_t) ** 2).mean()
-            loss_t = torch.nn.functional.binary_cross_entropy_with_logits(t_logit.squeeze(), T_t)
-            loss = loss_y + loss_t
+            loss = ((y_pred.squeeze() - y_t) ** 2).mean()
             loss.backward()
             optimizer.step()
 
@@ -191,7 +216,7 @@ def run_uq(config: SyntheticConfig, n_samples: int = 2000) -> pd.DataFrame:
         model.train()  # Keep dropout active
         with torch.no_grad():
             for _ in range(n_mc_runs):
-                y0, y1, _ = model(X_test_t)
+                y0, y1 = model(X_test_t)
                 tau = (y1 - y0).squeeze().cpu().numpy()
                 tau_samples.append(tau)
 
@@ -253,9 +278,10 @@ def run_training_dynamics(config: SyntheticConfig, n_samples: int = 2000) -> pd.
     )
 
     # Train model and track mask evolution
-    model = MyDragonNet(
+    from src.models.dragonnet import TarNet
+    model = TarNet(
         input_dim=X.shape[1],
-        hidden_dim=120,
+        hidden=120,
         use_gating=True,
         dropout_p=0.4,
     ).to(DEVICE)
@@ -271,11 +297,9 @@ def run_training_dynamics(config: SyntheticConfig, n_samples: int = 2000) -> pd.
     for epoch in range(epochs):
         model.train()
         optimizer.zero_grad()
-        y0, y1, t_logit = model(X_t)
+        y0, y1 = model(X_t)
         y_pred = y0 * (1 - T_t.view(-1, 1)) + y1 * T_t.view(-1, 1)
-        loss_y = ((y_pred.squeeze() - y_t) ** 2).mean()
-        loss_t = torch.nn.functional.binary_cross_entropy_with_logits(t_logit.squeeze(), T_t)
-        loss = loss_y + loss_t
+        loss = ((y_pred.squeeze() - y_t) ** 2).mean()
         loss.backward()
         optimizer.step()
 
@@ -303,9 +327,19 @@ def run_training_dynamics(config: SyntheticConfig, n_samples: int = 2000) -> pd.
     return pd.DataFrame(rows)
 
 
-def plot_scaling(df: pd.DataFrame, output_path: Path):
+def plot_scaling(
+    df: pd.DataFrame,
+    output_path: Path,
+    allowed_sizes: Optional[List[int]] = None,
+    title: str = "Scaling Analysis",
+    log_x: bool = True,
+):
     """Plot scaling results."""
-    summary = df.groupby("n_samples").agg({
+    plot_df = df.copy()
+    if allowed_sizes is not None:
+        plot_df = plot_df[plot_df["n_samples"].isin(allowed_sizes)]
+
+    summary = plot_df.groupby("n_samples").agg({
         "pehe_cf": ["mean", "std"],
         "pehe_ctrl": ["mean", "std"],
     })
@@ -314,15 +348,16 @@ def plot_scaling(df: pd.DataFrame, output_path: Path):
     x = summary.index.values
 
     ax.errorbar(x, summary[("pehe_cf", "mean")], yerr=summary[("pehe_cf", "std")],
-                label="CF (plug-in)", marker="o", capsize=3)
+                label="Causal Forest", marker="o", capsize=3)
     ax.errorbar(x, summary[("pehe_ctrl", "mean")], yerr=summary[("pehe_ctrl", "std")],
                 label="CTRL-DML", marker="s", capsize=3)
 
     ax.set_xlabel("Sample Size")
     ax.set_ylabel("PEHE")
-    ax.set_title("Scaling Analysis")
-    ax.legend()
-    ax.set_xscale("log")
+    ax.set_title(title)
+    ax.legend(frameon=False)
+    if log_x:
+        ax.set_xscale("log")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -330,28 +365,50 @@ def plot_scaling(df: pd.DataFrame, output_path: Path):
     print(f"Saved: {output_path}")
 
 
-def generate_latex_macros(scaling_df: pd.DataFrame, uq_df: pd.DataFrame,
-                          dynamics_df: pd.DataFrame, gen: MacroGenerator):
-    """Generate LaTeX macros."""
-    if scaling_df is not None:
-        for n in scaling_df["n_samples"].unique():
-            mask = scaling_df["n_samples"] == n
-            suffix = {500: "FiveHundred", 1000: "OneK", 2000: "TwoK", 5000: "FiveK"}.get(n, str(n))
-            gen.add(f"ScaleCfN{suffix}", scaling_df.loc[mask, "pehe_cf"].mean(), "Scaling Results")
-            gen.add(f"ScaleCtrlN{suffix}", scaling_df.loc[mask, "pehe_ctrl"].mean(), "Scaling Results")
+def plot_training_dynamics(df: pd.DataFrame, output_path: Path) -> None:
+    """Plot mask-weight dynamics over training."""
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(df["epoch"], df["conf_weight"], label="confounder")
+    ax.plot(df["epoch"], df["inst_weight"], label="instrument")
+    ax.plot(df["epoch"], df["prog_weight"], label="prognostic")
+    ax.plot(df["epoch"], df["noise_weight"], label="noise")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Mask weight")
+    ax.set_title("Training Dynamics")
+    ax.legend(frameon=False)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {output_path}")
 
-    if uq_df is not None:
-        gen.add("UqMcCov", uq_df["mc_coverage"].mean(), "Uncertainty Quantification")
-        gen.add("UqMcWidth", uq_df["mc_width"].mean(), "Uncertainty Quantification")
-        gen.add("UqConfCov", uq_df["conf_coverage"].mean(), "Uncertainty Quantification")
-        gen.add("UqConfWidth", uq_df["conf_width"].mean(), "Uncertainty Quantification")
 
-    if dynamics_df is not None and len(dynamics_df) > 0:
-        last = dynamics_df.iloc[-1]
-        gen.add("DynConfWeight", last["conf_weight"], "Training Dynamics")
-        gen.add("DynInstWeight", last["inst_weight"], "Training Dynamics")
-        gen.add("DynNoiseWeight", last["noise_weight"], "Training Dynamics")
-        gen.add("DynDecayEpoch", int(last["epoch"]), "Training Dynamics")
+def plot_uq_metrics(df: pd.DataFrame, output_path: Path) -> None:
+    """Plot MC Dropout vs conformal coverage and width."""
+    mc_cov = df["mc_coverage"].mean()
+    conf_cov = df["conf_coverage"].mean()
+    mc_w = df["mc_width"].mean()
+    conf_w = df["conf_width"].mean()
+
+    fig, axes = plt.subplots(1, 2, figsize=(7, 3.5))
+    axes[0].bar(["MC", "Conformal"], [mc_cov, conf_cov], color=["#4C78A8", "#F58518"])
+    axes[0].axhline(0.95, linestyle="--", color="gray", linewidth=1)
+    axes[0].set_ylim(0, 1.05)
+    axes[0].set_ylabel("Coverage")
+    axes[0].set_title("Coverage")
+
+    axes[1].bar(["MC", "Conformal"], [mc_w, conf_w], color=["#4C78A8", "#F58518"])
+    axes[1].set_ylabel("Avg. width")
+    axes[1].set_title("Interval Width")
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {output_path}")
+
+
+def print_latex_reminder():
+    """Print reminder to regenerate LaTeX macros."""
+    print("\nTo regenerate LaTeX macros, run: python -m src.utils.latex")
 
 
 def main():
@@ -364,32 +421,41 @@ def main():
 
     config = SyntheticConfig(seeds=args.seeds, n_noise=args.n_noise)
     output = get_output_manager()
-    gen = MacroGenerator()
-
-    scaling_df = None
-    uq_df = None
-    dynamics_df = None
 
     if args.analysis in ["scaling", "all"]:
         scaling_df = run_scaling(config)
         csv_path = output.csv_path("scaling_dml")
         scaling_df.to_csv(csv_path, index=False)
         print(f"\nSaved: {csv_path}")
-        plot_scaling(scaling_df, output.figure_path("scaling_plot"))
+        plot_scaling(
+            scaling_df,
+            output.figure_path("scaling_dml"),
+            allowed_sizes=[500, 1000],
+            title="Scaling (noise=50)",
+            log_x=False,
+        )
+        plot_scaling(
+            scaling_df,
+            output.figure_path("scaling_results"),
+            title="Scaling Law",
+            log_x=True,
+        )
 
     if args.analysis in ["uq", "all"]:
         uq_df = run_uq(config, n_samples=args.n_samples)
         csv_path = output.csv_path("uq_metrics")
         uq_df.to_csv(csv_path, index=False)
         print(f"\nSaved: {csv_path}")
+        plot_uq_metrics(uq_df, output.figure_path("uq_conformal"))
 
     if args.analysis in ["dynamics", "all"]:
         dynamics_df = run_training_dynamics(config, n_samples=args.n_samples)
         csv_path = output.csv_path("training_dynamics")
         dynamics_df.to_csv(csv_path, index=False)
         print(f"\nSaved: {csv_path}")
+        plot_training_dynamics(dynamics_df, output.figure_path("training_dynamics"))
 
-    generate_latex_macros(scaling_df, uq_df, dynamics_df, gen)
+    print_latex_reminder()
 
 
 if __name__ == "__main__":

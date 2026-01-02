@@ -31,7 +31,7 @@ class CTRLConfig:
     batch_size: int = 192
     plugin_epochs: int = 220
     nuisance_epochs: int = 150
-    tau_epochs: int = 300
+    tau_epochs: int = 360
     lr_plugin: float = 3e-3
     lr_tau: float = 3e-4
     k_folds: int = 3
@@ -39,10 +39,11 @@ class CTRLConfig:
     grad_clip: float = 1.0
     z_clip: float = 5.0
     w_clip: float = 0.05
+    eps: float = 0.05
     aux_beta_start: float = 0.8
     aux_beta_end: float = 0.3
-    aux_decay_epochs: int = 200
-    freeze_backbone: bool = True
+    aux_decay_epochs: int = 180
+    freeze_backbone: bool = False
 
 
 def set_seed(seed: int) -> None:
@@ -80,6 +81,8 @@ def train_plugin(
         for i in range(0, x_t.shape[0], batch_size):
             idx = perm[i:i + batch_size]
             bx, by, bt = x_t[idx], y_t[idx], t_t[idx]
+            if bx.shape[0] < 2:
+                continue  # Avoid BatchNorm issues on tiny batches.
             opt.zero_grad()
             y0_pred, y1_pred = model(bx)
             y_pred = bt * y1_pred + (1 - bt) * y0_pred
@@ -117,6 +120,8 @@ def train_nuisance(
         for i in range(0, x_t.shape[0], batch_size):
             idx = perm[i:i + batch_size]
             bx, by, bt = x_t[idx], y_t[idx], t_t[idx]
+            if bx.shape[0] < 2:
+                continue  # Avoid BatchNorm issues on tiny batches.
             opt.zero_grad()
             y0_pred, y1_pred, t_prob = model(bx)
             y_pred = bt * y1_pred + (1 - bt) * y0_pred
@@ -171,23 +176,36 @@ def cross_fit_nuisance(
 def stabilize_residuals(
     R: np.ndarray,
     W: np.ndarray,
-    clip_w: float = 0.05,
-    z_clip: float = 10.0
+    w_clip: float = 0.05,
+    z_clip: float = 5.0,
+    eps: float = 0.05
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Return pseudo-outcome Z and weights s for the ratio R-learner."""
-    R_mean, R_std = float(np.mean(R)), float(np.std(R))
-    W_std = float(np.std(W))
-    R_std = R_std + 1e-8
-    W_std = W_std + 1e-8
+    """
+    Return pseudo-outcome Z and weights s for the ratio R-learner.
 
-    R_stdzd = (R - R_mean) / R_std
-    W_stdzd = W / W_std
-    W_clip = np.clip(W_stdzd, -clip_w, clip_w)
-    W_safe = np.sign(W_clip) * np.maximum(np.abs(W_clip), 1e-3)
-    Z = R_stdzd / W_safe
+    Standard R-learner: minimize E[s * (tau(X) - Z)^2] where Z = R/W.
+
+    Args:
+        R: Outcome residuals Y - m(X)
+        W: Treatment residuals T - e(X)
+        w_clip: Minimum |W| for division stability
+        z_clip: Clip Z to [-z_clip, z_clip]
+        eps: Weight cap, s = min(W^2, eps^2)
+
+    Returns:
+        Z: Pseudo-outcomes (clipped R/W)
+        s: Sample weights min(W^2, eps^2)
+    """
+    # Ensure |W| >= w_clip for division stability
+    W_safe = np.sign(W) * np.maximum(np.abs(W), w_clip)
+
+    # Compute pseudo-outcome Z = R / W, then clip
+    Z = R / W_safe
     Z = np.clip(Z, -z_clip, z_clip)
-    s = np.minimum(W_safe ** 2, clip_w ** 2)
-    s = s / (np.mean(s) + 1e-8)
+
+    # Compute weights s = min(W^2, eps^2)
+    s = np.minimum(W ** 2, eps ** 2)
+
     return Z.astype(np.float32), s.astype(np.float32)
 
 
@@ -201,17 +219,19 @@ def train_rlearner(
     dropout_p: float = 0.35,
     hidden_dim: int = 96,
     batch_size: int = 192,
-    epochs: int = 300,
+    epochs: int = 360,
     lr: float = 3e-4,
     grad_clip: float = 0.0,
     warm_start_from: Optional[TarNet] = None,
     teacher_tau: Optional[np.ndarray] = None,
-    aux_beta_start: float = 0.1,
-    aux_beta_end: float = 0.0,
-    aux_decay_epochs: int = 50,
+    aux_beta_start: float = 0.8,
+    aux_beta_end: float = 0.3,
+    aux_decay_epochs: int = 180,
     freeze_backbone: bool = False,
+    val_split: float = 0.1,
+    early_stopping_patience: int = 20,
 ) -> TauNet:
-    """Train orthogonal R-learner tau head."""
+    """Train orthogonal R-learner tau head with early stopping."""
     set_seed(seed)
     model = TauNet(X.shape[1], hidden_dim, dropout_p, use_gating).to(DEVICE)
 
@@ -229,25 +249,50 @@ def train_rlearner(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=lr, weight_decay=1e-5
     )
-    x_t = torch.from_numpy(X).float().to(DEVICE)
-    z_t = torch.from_numpy(Z).float().to(DEVICE)
-    w_t = torch.from_numpy(np.maximum(weights, 1e-6)).float().to(DEVICE)
-    teacher_t = torch.from_numpy(teacher_tau).float().to(DEVICE) if teacher_tau is not None else None
+
+    # Train/val split
+    n = X.shape[0]
+    n_val = int(n * val_split) if val_split > 0 else 0
+    perm = np.random.permutation(n)
+    val_idx = perm[:n_val] if n_val > 0 else np.array([], dtype=int)
+    train_idx = perm[n_val:]
+
+    x_train = torch.from_numpy(X[train_idx]).float().to(DEVICE)
+    z_train = torch.from_numpy(Z[train_idx]).float().to(DEVICE)
+    w_train = torch.from_numpy(np.maximum(weights[train_idx], 1e-6)).float().to(DEVICE)
+
+    if n_val > 0:
+        x_val = torch.from_numpy(X[val_idx]).float().to(DEVICE)
+        z_val = torch.from_numpy(Z[val_idx]).float().to(DEVICE)
+        w_val = torch.from_numpy(np.maximum(weights[val_idx], 1e-6)).float().to(DEVICE)
+
+    teacher_t = None
+    if teacher_tau is not None:
+        teacher_t = torch.from_numpy(teacher_tau[train_idx]).float().to(DEVICE)
 
     def beta_for_epoch(epoch: int) -> float:
         if aux_decay_epochs <= 0:
             return aux_beta_end
         if epoch >= aux_decay_epochs:
             return aux_beta_end
-        frac = 1 - epoch / aux_decay_epochs
-        return aux_beta_end + frac * (aux_beta_start - aux_beta_end)
+        progress = epoch / aux_decay_epochs
+        # Cosine decay
+        return aux_beta_end + 0.5 * (aux_beta_start - aux_beta_end) * (1 + np.cos(np.pi * progress))
+
+    # Early stopping state
+    best_val_loss = float('inf')
+    best_weights = None
+    patience_counter = 0
 
     model.train()
     for epoch in range(epochs):
-        perm = torch.randperm(x_t.shape[0])
-        for i in range(0, x_t.shape[0], batch_size):
+        # Training
+        perm = torch.randperm(x_train.shape[0])
+        for i in range(0, x_train.shape[0], batch_size):
             idx = perm[i:i + batch_size]
-            bx, bz, bw = x_t[idx], z_t[idx], w_t[idx]
+            bx, bz, bw = x_train[idx], z_train[idx], w_train[idx]
+            if bx.shape[0] < 2:
+                continue  # Avoid BatchNorm issues on tiny batches.
             opt.zero_grad()
             tau_pred = model(bx)
             loss_dml = torch.mean(bw * (tau_pred - bz) ** 2)
@@ -261,6 +306,28 @@ def train_rlearner(
             if grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             opt.step()
+
+        # Validation and early stopping
+        if n_val > 0 and early_stopping_patience > 0:
+            model.eval()
+            with torch.no_grad():
+                val_pred = model(x_val)
+                val_loss = torch.mean(w_val * (val_pred - z_val) ** 2).item()
+            model.train()
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_weights = {k: v.clone() for k, v in model.state_dict().items()}
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= early_stopping_patience:
+                    break
+
+    # Load best weights if early stopping was used
+    if best_weights is not None:
+        model.load_state_dict(best_weights)
+
     return model
 
 
@@ -319,14 +386,14 @@ class CTRLOrthogonalLearner:
         """
         cfg = self.config
 
-        # Stage 0: plug-in warm start
+        # Stage 0: plug-in warm start (use hidden_tau for compatible architecture)
         self.plugin_model = train_plugin(
             X, y, T,
             use_gating=cfg.use_gating,
             lambda_sparsity=cfg.lambda_sparsity,
             seed=seed,
             dropout_p=cfg.dropout_p,
-            hidden_dim=cfg.hidden_dim,
+            hidden_dim=cfg.hidden_tau,
             batch_size=cfg.batch_size,
             epochs=cfg.plugin_epochs,
             lr=cfg.lr_plugin,
@@ -346,7 +413,7 @@ class CTRLOrthogonalLearner:
         )
         e_hat = np.clip(e_hat, 0.01, 0.99)
         R, W = y - m_hat, T - e_hat
-        Z, weights = stabilize_residuals(R, W, clip_w=cfg.w_clip, z_clip=cfg.z_clip)
+        Z, weights = stabilize_residuals(R, W, w_clip=cfg.w_clip, z_clip=cfg.z_clip, eps=cfg.eps)
 
         # Stage 2: orthogonal tau head with optional distillation
         self.tau_model = train_rlearner(

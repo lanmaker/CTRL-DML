@@ -12,34 +12,23 @@
 
 **Conflict.** Deep nets like DragonNet overfit noise; trees ignore unstructured text; DML can be unstable when nuisances are weak.
 **Solution.** CTRL-DML makes DML a first-class citizen: sparse tabular attention, modular nuisances, and an orthogonal head (ratio targets + warm-start + clipping) with optional distillation.
-**Claim.** In high-dimensional/weak-nuisance settings, the orthogonal head + sparsity yields more stable CATE than plug-in baselines.
+**Claim.** In high-dimensional/weak-nuisance settings, the orthogonal head + sparsity can yield more stable CATE than plug-in baselines.
 **Evidence.**
 - White-box: feature-role plots separate confounders/instruments/noise.
 - Robustness: stable PEHE as nuisance dimensions grow; orthogonal head degrades more gracefully when nuisances are weakened.
-- Scaling: with noise=50, CTRL-DML stays ahead of CF as $N$ grows (multi-seed).
-- Multimodal: dense text+tabular (and cross-attn) beat TF-IDF forests; sweep results now include multiple seeds.
+- Scaling: compare CF vs CTRL-DML as $N$ grows (multi-seed).
+- Multimodal: dense fusion, bag-of-embeddings, and cross-attention comparisons; sweep results include multiple seeds.
 - Public baselines: TWINS/ACIC loaders + baselines included; semi-synthetic Yelp text+tabular benchmark with ground-truth CATE.
 **Reliability.** MC Dropout under-covers; conformal calibration restores nominal coverage.
 
 ---
 
-## Key Results (Full Run: 2025-12-31)
+## Results & Reproducibility
 
-| Experiment | CTRL Plug-in | CTRL-DML | Causal Forest | Notes |
-|------------|--------------|----------|---------------|-------|
-| IHDP (100 realizations) | 5.58 ± 8.23 | 7.78 ± 7.72 | 3.64 ± 6.56 | Median: Plugin 2.57, DML 4.67 |
-| Ablation: No gating | 1.63 | 4.59 | - | 3 seeds (42, 1024, 2023) |
-| Ablation: Gating + L1 | 1.64 | 8.80 | - | 3 seeds, N=2000, epochs 150/300 |
-| Scaling N=500 | 1.58 | 8.77 | 1.92 | 3 seeds |
-| Scaling N=1000 | 1.61 | 8.83 | 1.72 | 3 seeds |
-| Scaling N=2000 | 1.61 | 8.78 | 1.57 | 3 seeds |
-| Scaling N=5000 | 1.57 | 8.56 | 1.48 | 3 seeds |
-| Nuisance misspec (strong) | 1.61 | 8.78 | - | 3 seeds |
-| Nuisance misspec (weak) | 1.61 | 8.46 | - | 3 seeds |
-| Multimodal (p_noise=0) | 1.24 | 1.24 | 0.08 | |
-| Yelp semi-synthetic | 1.12 | 1.05 | 1.49 | |
-| UQ MC coverage | - | 0.12 | - | 100 MC runs |
-| UQ Conformal coverage | - | 0.95 | - | Target: 0.95 |
+All numbers and figures are generated from scripts. After running `./reproduce.sh`, see:
+- `output/tables/` for raw CSV results.
+- `output/figures/` for regenerated plots.
+- `output/results_macros.tex` for LaTeX macros consumed by `CTRL-DML-Paper/main.tex`.
 
 ---
 
@@ -50,15 +39,32 @@
 git clone https://github.com/lanmaker/CTRL-DML.git
 cd CTRL-DML
 pip install -r requirements.txt
-# Optional: install bundled CATENets in editable mode
-pip install -e external/CATENets
+# Optional: install bundled catenets in editable mode
+pip install -e external/catenets
 ```
 
 ### Run Experiments
 
 ```bash
-# Ablation study
+# One-click reproduction (runs all experiments)
+./reproduce.sh           # Full run (~hours)
+./reproduce.sh --fast    # Fast mode for testing (~minutes)
+
+# Or run individual experiments:
 python -m src.experiments.ablation --mode all
+python -m src.experiments.crossfit_ablation
+python -m src.experiments.benchmarks --dataset all
+python -m src.experiments.public_benchmarks
+python -m src.experiments.feature_roles
+python -m src.experiments.synthetic --analysis all
+python -m src.experiments.robustness --test all
+python -m src.experiments.multimodal --experiment all
+python -m src.experiments.multimodal --experiment bert
+python -m src.experiments.yelp_semisynth
+python -m src.experiments.realdata --dataset all
+
+# Regenerate LaTeX macros from results
+python -m src.utils.latex --generate-macros
 
 # All outputs go to output/figures/ and output/tables/
 ```
@@ -81,13 +87,18 @@ CTRL-DML/
 │   │   ├── multimodal.py
 │   │   └── synthetic.py
 │   ├── experiments/               # Experiment scripts
-│   │   └── ablation.py
+│   │   ├── ablation.py            # Core ablation study
+│   │   ├── benchmarks.py          # IHDP/TWINS/ACIC benchmarks
+│   │   ├── feature_roles.py       # Feature role decomposition
+│   │   ├── synthetic.py           # Scaling, UQ, dynamics
+│   │   ├── robustness.py          # Nuisance misspec, bias-variance
+│   │   ├── multimodal.py          # Multimodal experiments
+│   │   └── realdata.py            # LaLonde, STAR real data
 │   └── utils/                     # Utilities
 │       ├── io.py                  # Output path management
 │       ├── metrics.py             # PEHE, ATE, bootstrap
 │       ├── training.py            # Training utilities
-│       ├── latex.py               # LaTeX table/macro generation
-│       └── plotting.py            # Unified plotting style
+│       └── latex.py               # LaTeX table/macro generation
 ├── output/                        # All outputs
 │   ├── figures/                   # PDF figures (unified style)
 │   ├── tables/                    # CSV data + LaTeX tables
@@ -96,6 +107,7 @@ CTRL-DML/
 ├── external/                      # External dependencies
 ├── CTRL-DML-Paper/               # Paper directory
 │   └── main.tex                   # Uses macros from output/
+├── reproduce.sh                   # One-click reproduction script
 └── requirements.txt
 ```
 
@@ -112,8 +124,11 @@ All experiment outputs are centralized:
 ### Regenerate Outputs
 
 ```bash
-# Regenerate LaTeX macros from CSV data
-python -m src.utils.latex --generate-all
+# Full reproduction (runs all experiments + generates macros)
+./reproduce.sh
+
+# Or just regenerate LaTeX macros from existing CSV data
+python -m src.utils.latex --generate-macros
 
 # Paper compilation (from CTRL-DML-Paper/)
 cd CTRL-DML-Paper && pdflatex main.tex
@@ -123,31 +138,12 @@ cd CTRL-DML-Paper && pdflatex main.tex
 
 ## Methodology
 
-- **Sparse attention:** `TabularAttention` with L1 penalty to mute noise.
+- **Sparse attention:** `TabularAttention` with L1 penalty to mute noise features.
 - **Two-tower fusion:** text embeddings + tabular dense tower for multimodal confounders.
-- **Orthogonal head:** DML-style ratio targets with warm-start and clipping.
-- **Targets:** heads for treatment, control, and propensity with targeted regularization.
-- **Tuning:** Optuna used for LR, dropout, weight decay.
-- **UQ:** Monte Carlo Dropout + conformal calibration.
-
----
-
-## Plotting Style
-
-All figures use a unified academic style defined in `src/utils/plotting.py`:
-
-```python
-from src.utils.plotting import set_style, COLORS, create_figure
-
-set_style()
-fig, ax = create_figure(figsize=(6, 4))
-ax.plot(x, y, color=COLORS['primary'])  # Dark red (#8B1C1C)
-```
-
-Color palette:
-- Primary: Dark red (#8B1C1C) - CTRL-DML
-- Secondary: Steel blue (#2C5F8A) - Causal Forest
-- Accent: Forest green (#4A7C59) - DragonNet
+- **Orthogonal head:** DML-style R-learner with ratio targets, warm-start from plugin, and distillation.
+- **Pseudo-outcome stabilization:** W-clipping (min |W|=0.05), Z-clipping (±5), weighted loss.
+- **Targets:** heads for Y(0), Y(1), and propensity with targeted regularization.
+- **UQ:** Monte Carlo Dropout + conformal calibration for interval estimates.
 
 ---
 

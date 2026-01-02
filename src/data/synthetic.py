@@ -15,26 +15,31 @@ def get_stress_data(
     n_noise: int = 50,
     n_confounders: int = 5,
     n_instruments: int = 5,
+    n_prognostic: int = 5,
     seed: int = 42
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Generate semi-synthetic stress test with confounders, instruments, and noise.
+    Generate semi-synthetic stress test with all four feature roles.
 
     This DGP is designed to test robustness to high-dimensional noise:
     - Confounders (C): affect both T and Y
     - Instruments (I): affect only T
+    - Prognostic (P): affect only Y (not T)
     - Noise (N): affect neither T nor Y
+
+    Feature ordering in X: [Confounders, Instruments, Prognostic, Noise]
 
     Args:
         n_samples: Number of samples
         n_noise: Number of noise dimensions
         n_confounders: Number of confounder dimensions
         n_instruments: Number of instrument dimensions
+        n_prognostic: Number of prognostic dimensions
         seed: Random seed
 
     Returns:
         Tuple of (X, T, Y, true_te)
-            X: Features (n_samples, n_confounders + n_instruments + n_noise)
+            X: Features (n_samples, n_confounders + n_instruments + n_prognostic + n_noise)
             T: Treatment indicator (n_samples,)
             Y: Outcome (n_samples,)
             true_te: Ground-truth CATE (n_samples,)
@@ -42,19 +47,35 @@ def get_stress_data(
     rng = np.random.default_rng(seed)
 
     # Generate features
-    C = rng.normal(0, 1, size=(n_samples, n_confounders))  # Confounders
-    I = rng.normal(0, 1, size=(n_samples, n_instruments))  # Instruments
-    N = rng.normal(0, 1, size=(n_samples, n_noise))        # Noise
-    X = np.concatenate([C, I, N], axis=1).astype(np.float32)
+    C = rng.normal(0, 1, size=(n_samples, n_confounders))   # Confounders
+    I = rng.normal(0, 1, size=(n_samples, n_instruments))   # Instruments
+    P = rng.normal(0, 1, size=(n_samples, n_prognostic))    # Prognostic
+    N = rng.normal(0, 1, size=(n_samples, n_noise))         # Noise
+    X = np.concatenate([C, I, P, N], axis=1).astype(np.float32)
 
-    # Treatment assignment (depends on C and I, not N)
-    logit = np.sum(C, axis=1) + 0.5 * C[:, 0] * C[:, 1] + 2 * np.sum(I, axis=1)
+    # Treatment assignment (depends on C and I, not P or N)
+    if n_confounders >= 2:
+        logit = np.sum(C, axis=1) + 0.5 * C[:, 0] * C[:, 1] + 2 * np.sum(I, axis=1)
+    elif n_confounders == 1:
+        logit = C[:, 0] + 2 * np.sum(I, axis=1)
+    else:
+        logit = 2 * np.sum(I, axis=1)
     propensity = expit(logit)
     T = rng.binomial(1, propensity).astype(np.float32)
 
-    # Outcome (depends on C and T, not I or N)
-    true_te = (2 * np.sin(C[:, 0] * np.pi) + np.maximum(0, C[:, 1])).astype(np.float32)
-    y0 = np.sum(C, axis=1) ** 2 + rng.normal(0, 0.5, size=n_samples)
+    # Outcome (depends on C, P, and T, not I or N)
+    if n_confounders >= 2:
+        true_te = (2 * np.sin(C[:, 0] * np.pi) + np.maximum(0, C[:, 1])).astype(np.float32)
+    elif n_confounders == 1:
+        true_te = (2 * np.sin(C[:, 0] * np.pi)).astype(np.float32)
+    else:
+        true_te = np.ones(n_samples, dtype=np.float32) * 2.0  # Constant treatment effect
+
+    # y0 includes confounders and prognostic features
+    y0_base = np.sum(C, axis=1) ** 2 if n_confounders > 0 else np.zeros(n_samples)
+    y0_prog = 0.5 * np.sum(P, axis=1) if n_prognostic > 0 else np.zeros(n_samples)
+    y0_prog_nl = 0.3 * P[:, 0] ** 2 if n_prognostic > 0 else np.zeros(n_samples)
+    y0 = y0_base + y0_prog + y0_prog_nl + rng.normal(0, 0.5, size=n_samples)
     Y = (y0 + true_te * T).astype(np.float32)
 
     return X, T, Y, true_te
@@ -147,17 +168,29 @@ def get_ihdp_style_data(
     return X, T, Y, true_te
 
 
-def get_feature_roles(n_confounders: int = 5, n_instruments: int = 5, n_noise: int = 50):
+def get_feature_roles(
+    n_confounders: int = 5,
+    n_instruments: int = 5,
+    n_prognostic: int = 5,
+    n_noise: int = 50
+):
     """
     Get indices for different feature roles in stress test data.
 
+    Feature ordering: [Confounders, Instruments, Prognostic, Noise]
+
     Returns:
-        Dictionary with 'confounders', 'instruments', 'noise' keys
+        Dictionary with 'confounders', 'instruments', 'prognostic', 'noise' keys
     """
+    c_end = n_confounders
+    i_end = c_end + n_instruments
+    p_end = i_end + n_prognostic
+    n_end = p_end + n_noise
     return {
-        "confounders": list(range(n_confounders)),
-        "instruments": list(range(n_confounders, n_confounders + n_instruments)),
-        "noise": list(range(n_confounders + n_instruments, n_confounders + n_instruments + n_noise)),
+        "confounders": list(range(0, c_end)),
+        "instruments": list(range(c_end, i_end)),
+        "prognostic": list(range(i_end, p_end)),
+        "noise": list(range(p_end, n_end)),
     }
 
 

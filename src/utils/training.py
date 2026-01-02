@@ -193,40 +193,8 @@ def eval_epoch(
     return total_loss / n_batches if n_batches > 0 else 0.0
 
 
-def stabilize_residuals(
-    R: np.ndarray,
-    W: np.ndarray,
-    clip_w: float = 0.05,
-    z_clip: float = 10.0
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Stabilize residuals for orthogonal R-learner.
-
-    Returns pseudo-outcome Z and weights s for the ratio R-learner.
-
-    Args:
-        R: Outcome residuals (Y - m_hat)
-        W: Treatment residuals (T - e_hat)
-        clip_w: Clipping threshold for W
-        z_clip: Clipping threshold for Z
-
-    Returns:
-        Tuple of (Z, weights)
-    """
-    R_mean, R_std = float(np.mean(R)), float(np.std(R))
-    W_std = float(np.std(W))
-    R_std = R_std + 1e-8
-    W_std = W_std + 1e-8
-
-    R_stdzd = (R - R_mean) / R_std
-    W_stdzd = W / W_std
-    W_clip = np.clip(W_stdzd, -clip_w, clip_w)
-    W_safe = np.sign(W_clip) * np.maximum(np.abs(W_clip), 1e-3)
-    Z = R_stdzd / W_safe
-    Z = np.clip(Z, -z_clip, z_clip)
-    s = np.minimum(W_safe ** 2, clip_w ** 2)
-    s = s / (np.mean(s) + 1e-8)
-    return Z.astype(np.float32), s.astype(np.float32)
+# stabilize_residuals moved to src/models/orthogonal_learner.py
+# Import from there for the canonical implementation
 
 
 def numpy_to_tensor(arr: np.ndarray, device: torch.device = DEVICE) -> torch.Tensor:

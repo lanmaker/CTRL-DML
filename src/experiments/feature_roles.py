@@ -272,6 +272,26 @@ def plot_feature_roles(df: pd.DataFrame, output_path: Path, use_model: bool = Fa
     plt.close(fig)
 
 
+def plot_feature_importance_sparse(df: pd.DataFrame, output_path: Path) -> None:
+    """Plot average mask weight by feature role."""
+    summary = df.groupby("true_role")["mask_weight"].agg(["mean", "std"])
+    order = [c for c in ["confounder", "instrument", "prognostic", "noise"] if c in summary.index]
+    summary = summary.loc[order]
+
+    fig, ax = plt.subplots(figsize=(5, 3.5))
+    x = np.arange(len(summary.index))
+    ax.bar(x, summary["mean"], yerr=summary["std"], capsize=3, color=COLORS['primary'])
+    ax.set_ylabel("Mask weight")
+    ax.set_title("Feature Importance by Role")
+    ax.set_xticks(x)
+    ax.set_xticklabels(summary.index, rotation=15, ha="right")
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved figure: {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Feature Role Analysis")
     parser.add_argument("--n-samples", type=int, default=2000)
@@ -343,6 +363,7 @@ def main():
     fig_path = output.figure_path("feature_roles")
     plot_feature_roles(df, fig_path, use_model=use_model)
     print(f"Saved figure: {fig_path}")
+    plot_feature_importance_sparse(df, output.figure_path("feature_importance_sparse"))
 
 
 if __name__ == "__main__":
