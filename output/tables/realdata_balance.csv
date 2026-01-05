@@ -1,5 +1,5 @@
 dataset,weighting,max_smd,n_imbalanced
 lalonde,unweighted,1.407988265314926,7
-lalonde,CTRL-IPW,1.404551957808386,6
-star,unweighted,0.07859120414169359,0
-star,CTRL-IPW,0.07923655074868317,0
+lalonde,CTRL-IPW,1.4300735947380097,7
+star,unweighted,0.0785912041416935,0
+star,CTRL-IPW,0.0861653202058275,0

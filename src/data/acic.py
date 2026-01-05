@@ -125,7 +125,40 @@ def load_acic(
     return X, t, y
 
 
+def compute_and_update_checksums() -> None:
+    """
+    Download all ACIC datasets and print checksums for updating ZIP_SHA256.
+
+    Usage:
+        python -m src.data.acic --compute-checksums
+
+    After running, copy the printed checksums into ZIP_SHA256 dict above.
+    """
+    print("Computing checksums for ACIC datasets...")
+    print("(This may take several minutes for large files)\n")
+
+    for kind in ["low", "high", "test_low"]:
+        print(f"Processing {kind}...")
+        try:
+            path = _download_zip(kind)
+            checksum = _sha256(path)
+            current = ZIP_SHA256.get(kind, "")
+            status = "✓ matches" if current == checksum else ("⚠ MISSING" if not current else "✗ MISMATCH")
+            print(f'  "{kind}": "{checksum}",  # {status}')
+        except Exception as e:
+            print(f'  "{kind}": "",  # Error: {e}')
+
+    print("\nCopy the checksums above into ZIP_SHA256 in src/data/acic.py")
+
+
 if __name__ == "__main__":
-    print("Listing low-d datasets (first 5):", list_acic_datasets("low")[:5])
-    X, T, Y = load_acic("low1", kind="low")
-    print(f"Loaded ACIC low1: X={X.shape}, T mean={T.mean():.3f}, Y mean={Y.mean():.3f}")
+    import sys
+
+    if "--compute-checksums" in sys.argv:
+        compute_and_update_checksums()
+    else:
+        print("Listing low-d datasets (first 5):", list_acic_datasets("low")[:5])
+        X, T, Y = load_acic("low1", kind="low")
+        print(f"Loaded ACIC low1: X={X.shape}, T mean={T.mean():.3f}, Y mean={Y.mean():.3f}")
+        print("\nTo compute checksums for all datasets, run:")
+        print("  python -m src.data.acic --compute-checksums")
