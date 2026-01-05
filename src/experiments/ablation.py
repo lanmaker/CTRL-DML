@@ -277,7 +277,7 @@ def main():
                         default=[42, 7] if FAST_RUN else [42, 7, 1024])
     parser.add_argument("--n-samples", type=int, default=DEFAULT_N_SAMPLES)
     parser.add_argument("--n-noise", type=int, default=50)
-    parser.add_argument("--k-folds", type=int, default=3)
+    parser.add_argument("--k-folds", type=int, default=3 if FAST_RUN else 5)
     parser.add_argument("--plugin-epochs", type=int, default=DEFAULT_EPOCHS_PLUGIN)
     parser.add_argument("--epochs-nuisance", type=int, default=DEFAULT_EPOCHS_NUISANCE)
     parser.add_argument("--epochs-tau", type=int, default=DEFAULT_EPOCHS_TAU)

@@ -15,6 +15,7 @@ from pathlib import Path
 import urllib.request
 import os
 import tempfile
+import hashlib
 
 # Column names for the IHDP CSV files
 COLUMNS = ["treatment", "y_factual", "y_cfactual", "mu0", "mu1"] + [f"x{i}" for i in range(1, 26)]
@@ -25,6 +26,8 @@ CSV_URL = "https://raw.githubusercontent.com/AMLab-Amsterdam/CEVAE/master/datase
 # NPZ source (1-100 replicates)
 NPZ_TRAIN_URL = "https://www.fredjo.com/files/ihdp_npci_1-100.train.npz"
 NPZ_TEST_URL = "https://www.fredjo.com/files/ihdp_npci_1-100.test.npz"
+NPZ_TRAIN_SHA256 = "750697c71b4f8d7a3aafff771b56a4ac4cd83ec649bf69afb04f8a5aee41a240"
+NPZ_TEST_SHA256 = "a70a8acbcc4e8deb677cc9bf9e9dabeb17caaa37cdbb1d7ba06be7ffb929c41c"
 
 # Local data directory (relative to project root)
 LOCAL_DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -34,6 +37,22 @@ CACHE_DIR = Path(tempfile.gettempdir()) / "ihdp_cache"
 
 # Global cache for NPZ data
 _npz_cache = {"train": None, "test": None}
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify_checksum(path: Path, expected: str, label: str) -> None:
+    if not expected:
+        return
+    actual = _sha256(path)
+    if actual != expected:
+        raise ValueError(f"{label} checksum mismatch: expected {expected}, got {actual}")
 
 
 def _find_npz_files() -> Tuple[Optional[Path], Optional[Path]]:
@@ -78,6 +97,9 @@ def _download_npz():
         if not test_path.exists():
             print("Downloading IHDP test data (100 replicates)...")
             urllib.request.urlretrieve(NPZ_TEST_URL, test_path)
+
+    _verify_checksum(train_path, NPZ_TRAIN_SHA256, "IHDP train NPZ")
+    _verify_checksum(test_path, NPZ_TEST_SHA256, "IHDP test NPZ")
 
     # Load into cache
     _npz_cache["train"] = np.load(train_path)
@@ -180,35 +202,44 @@ def load_ihdp_train_test(
     seed: int = 42
 ) -> dict:
     """
-    Load IHDP with train/test split.
+    Load IHDP with the official train/test split from the NPZ release.
 
     Args:
         rep: Replicate number
-        train_frac: Fraction for training
+        train_frac: Unused when using the official split (kept for backwards compatibility)
         seed: Random seed
 
     Returns:
         Dictionary with train/test arrays
     """
-    X, T, Y, true_cate = load_ihdp_arrays(rep)
+    _download_npz()
+    train = _npz_cache["train"]
+    test = _npz_cache["test"]
+
+    rep_idx = rep - 1
+    X_train = train["x"][:, :, rep_idx].astype(np.float32)
+    T_train = train["t"][:, rep_idx].astype(np.float32)
+    Y_train = train["yf"][:, rep_idx].astype(np.float32)
+    cate_train = (train["mu1"][:, rep_idx] - train["mu0"][:, rep_idx]).astype(np.float32)
+
+    X_test = test["x"][:, :, rep_idx].astype(np.float32)
+    T_test = test["t"][:, rep_idx].astype(np.float32)
+    Y_test = test["yf"][:, rep_idx].astype(np.float32)
+    cate_test = (test["mu1"][:, rep_idx] - test["mu0"][:, rep_idx]).astype(np.float32)
 
     rng = np.random.default_rng(seed)
-    n = len(Y)
-    idx = rng.permutation(n)
-    n_train = int(n * train_frac)
-
-    train_idx = idx[:n_train]
-    test_idx = idx[n_train:]
+    train_idx = rng.permutation(len(Y_train))
+    test_idx = rng.permutation(len(Y_test))
 
     return {
-        "X_train": X[train_idx],
-        "T_train": T[train_idx],
-        "Y_train": Y[train_idx],
-        "cate_train": true_cate[train_idx],
-        "X_test": X[test_idx],
-        "T_test": T[test_idx],
-        "Y_test": Y[test_idx],
-        "cate_test": true_cate[test_idx],
+        "X_train": X_train[train_idx],
+        "T_train": T_train[train_idx],
+        "Y_train": Y_train[train_idx],
+        "cate_train": cate_train[train_idx],
+        "X_test": X_test[test_idx],
+        "T_test": T_test[test_idx],
+        "Y_test": Y_test[test_idx],
+        "cate_test": cate_test[test_idx],
     }
 
 

@@ -87,6 +87,7 @@ def run_crossfit_ablation(config: CrossfitConfig) -> pd.DataFrame:
         cfg.plugin_epochs = 100
         cfg.nuisance_epochs = 80
         cfg.tau_epochs = 150
+        cfg.k_folds = min(3, cfg.k_folds)
 
     for seed in config.seeds:
         print(f"Seed {seed}...")

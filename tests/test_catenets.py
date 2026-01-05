@@ -7,6 +7,7 @@ baseline DragonNet model using the catenets library.
 import sys
 import os
 
+import pytest
 import torch
 import numpy as np
 
@@ -47,8 +48,7 @@ def test_dragonnet():
         # load returns: X, w, y, potential_outcomes_train, X_test, potential_outcomes_test
         X_train, w_train, y_train, _, X_test, po_test = load_dataset("ihdp", train_ratio=0.8)
     except Exception as e:
-        print(f"Error loading dataset: {e}")
-        return
+        pytest.skip(f"Could not load IHDP dataset: {e}")
 
     print(f"Data loaded. Train shape: {X_train.shape}")
     print(f"Unique treatment values (w_train): {np.unique(w_train)}")
@@ -94,7 +94,12 @@ def test_dragonnet():
 
     print(f"Prediction complete. First 5 CATE predictions: {cate_pred[:5]}")
     print(f"First 5 True CATE: {cate_true[:5]}")
-    print("Success! CATENets is working.")
+
+    # Assertions for regression testing
+    assert cate_pred.shape == cate_true.shape, f"Shape mismatch: {cate_pred.shape} vs {cate_true.shape}"
+    assert np.isfinite(cate_pred).all(), "Predictions contain NaN/Inf"
+    assert pehe < 10.0, f"PEHE {pehe:.4f} exceeds threshold (10.0) - model may be broken"
+    print("All assertions passed! CATENets is working.")
 
     return pehe
 

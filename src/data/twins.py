@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Tuple, Union
+import hashlib
 
 import numpy as np
 import pandas as pd
@@ -51,17 +52,40 @@ URLS = {
     "Y": "https://raw.githubusercontent.com/AMLab-Amsterdam/CEVAE/master/datasets/TWINS/twin_pairs_Y_3years_samesex.csv",
     "T": "https://raw.githubusercontent.com/AMLab-Amsterdam/CEVAE/master/datasets/TWINS/twin_pairs_T_3years_samesex.csv",
 }
+CHECKSUMS = {
+    "X": "6ec6263e678f67205d584ebda083173c1ec44fb46ea7cfaafe3c87a31f612b86",
+    "Y": "d03428d23ed308673f9151e3934aa7712df27c1fed244ed44ecc80a98a60836b",
+    "T": "fbe6eb1cad27794c61cbbd8b11b72a26e96549e59d64fb88b07b30aaf2bae07d",
+}
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify_checksum(path: Path, expected: str, label: str) -> None:
+    if not expected:
+        return
+    actual = _sha256(path)
+    if actual != expected:
+        raise ValueError(f"{label} checksum mismatch: expected {expected}, got {actual}")
 
 
 def _download(name: str) -> Path:
     """Download a dataset file if not already cached."""
     out = ROOT / f"{name}.csv"
     if out.exists():
+        _verify_checksum(out, CHECKSUMS.get(name, ""), f"TWINS {name}.csv")
         return out
     url = URLS[name]
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     out.write_bytes(resp.content)
+    _verify_checksum(out, CHECKSUMS.get(name, ""), f"TWINS {name}.csv")
     return out
 
 

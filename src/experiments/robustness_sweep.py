@@ -55,6 +55,7 @@ def run_noise_sweep(config: RobustnessSweepConfig) -> pd.DataFrame:
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
 
     for n_noise in config.noise_levels:
         for seed in config.seeds:

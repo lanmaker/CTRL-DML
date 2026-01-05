@@ -59,6 +59,7 @@ def run_sensitivity(config: SensitivityConfig) -> pd.DataFrame:
         base_config.plugin_epochs = 100
         base_config.nuisance_epochs = 80
         base_config.tau_epochs = 150
+        base_config.k_folds = min(3, base_config.k_folds)
     else:
         # Keep sweep tractable without changing other experiments.
         base_config.plugin_epochs = min(base_config.plugin_epochs, 160)

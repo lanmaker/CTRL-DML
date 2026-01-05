@@ -38,6 +38,12 @@ def test_my_model():
     print(f"PEHE Score: {pehe:.4f}")
     print("-" * 30)
 
+    # Assertions for regression testing
+    assert pred.shape == true_te.shape, f"Shape mismatch: {pred.shape} vs {true_te.shape}"
+    assert np.isfinite(pred).all(), "Predictions contain NaN/Inf"
+    assert pehe < 5.0, f"PEHE {pehe:.4f} exceeds threshold (5.0) - model may be broken"
+    print("All assertions passed!")
+
 
 if __name__ == "__main__":
     test_my_model()

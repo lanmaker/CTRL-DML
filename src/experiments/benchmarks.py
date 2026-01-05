@@ -29,7 +29,7 @@ from src.models.orthogonal_learner import (
     CTRLConfig,
     set_seed,
 )
-from src.utils.metrics import compute_pehe, compute_ate, bootstrap_mean
+from src.utils.metrics import compute_pehe, compute_ate
 from src.utils.io import get_output_manager
 from src.utils.latex import df_to_latex_table
 
@@ -67,6 +67,7 @@ def run_ihdp_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
 
     for rep in range(1, config.n_replicates + 1):
         for seed in config.seeds:
@@ -120,6 +121,7 @@ def run_twins_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
 
     # Load full TWINS data
     X_full, T_full, Y_full = load_twins()
@@ -194,6 +196,7 @@ def run_acic_benchmark(
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
 
     # Get available datasets
     datasets = list_acic_datasets(kind)[:n_datasets]

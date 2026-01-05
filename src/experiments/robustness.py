@@ -62,6 +62,7 @@ def run_nuisance_misspecification(config: RobustnessConfig) -> pd.DataFrame:
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
 
     for seed in config.seeds:
         print(f"  Seed {seed}...")
@@ -168,6 +169,7 @@ def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
 
     for seed in config.seeds:
         print(f"  Seed {seed}...")

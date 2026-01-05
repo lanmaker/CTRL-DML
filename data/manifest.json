@@ -1,0 +1,54 @@
+{
+  "ihdp_npci_1-100.train.npz": {
+    "path": "data/ihdp_npci_1-100.train.npz",
+    "sha256": "750697c71b4f8d7a3aafff771b56a4ac4cd83ec649bf69afb04f8a5aee41a240",
+    "source": "https://www.fredjo.com/files/ihdp_npci_1-100.train.npz"
+  },
+  "ihdp_npci_1-100.test.npz": {
+    "path": "data/ihdp_npci_1-100.test.npz",
+    "sha256": "a70a8acbcc4e8deb677cc9bf9e9dabeb17caaa37cdbb1d7ba06be7ffb929c41c",
+    "source": "https://www.fredjo.com/files/ihdp_npci_1-100.test.npz"
+  },
+  "lalonde.csv": {
+    "path": "data/lalonde/lalonde.csv",
+    "sha256": "a49703ca0233ba0a27fa9cda959a38a07f6825def0f7743cf2380ce4e57dd3ef",
+    "source": "https://vincentarelbundock.github.io/Rdatasets/csv/MatchIt/lalonde.csv"
+  },
+  "STAR_Students.tab": {
+    "path": "data/star/STAR_Students.tab",
+    "sha256": "769be163ed54515858efa60b1a069c49ca0c475f0b0f9f5bdf90413be9d3ba97",
+    "source": "doi:10.7910/DVN/SIWH9F"
+  },
+  "twins_X.csv": {
+    "path": "data/twins/X.csv",
+    "sha256": "6ec6263e678f67205d584ebda083173c1ec44fb46ea7cfaafe3c87a31f612b86",
+    "source": "https://raw.githubusercontent.com/AMLab-Amsterdam/CEVAE/master/datasets/TWINS/twin_pairs_X_3years_samesex.csv"
+  },
+  "twins_Y.csv": {
+    "path": "data/twins/Y.csv",
+    "sha256": "d03428d23ed308673f9151e3934aa7712df27c1fed244ed44ecc80a98a60836b",
+    "source": "https://raw.githubusercontent.com/AMLab-Amsterdam/CEVAE/master/datasets/TWINS/twin_pairs_Y_3years_samesex.csv"
+  },
+  "twins_T.csv": {
+    "path": "data/twins/T.csv",
+    "sha256": "fbe6eb1cad27794c61cbbd8b11b72a26e96549e59d64fb88b07b30aaf2bae07d",
+    "source": "https://raw.githubusercontent.com/AMLab-Amsterdam/CEVAE/master/datasets/TWINS/twin_pairs_T_3years_samesex.csv"
+  },
+  "acic_low.zip": {
+    "path": "data/acic2019/low.zip",
+    "sha256": "c728f9b9fd23fc5f2ee7bcdbb23b84ae49c59106d3466c3c0955e9ef3bcbaba4",
+    "source": "https://www.dropbox.com/s/g0elnbfmhbf7rr3/low_dimensional_datasets.zip?dl=1"
+  },
+  "acic_high.zip": {
+    "path": "data/acic2019/high.zip",
+    "sha256": "",
+    "source": "https://www.dropbox.com/s/k2k1cs42i3pzkuu/high_dimensional_datasets.zip?dl=1",
+    "_note": "TODO: compute sha256 after first download"
+  },
+  "acic_test_low.zip": {
+    "path": "data/acic2019/test_low.zip",
+    "sha256": "",
+    "source": "https://www.dropbox.com/s/qaj6fjbzorzmwpp/TestDatasets_lowD_Dec28.zip?dl=1",
+    "_note": "TODO: compute sha256 after first download"
+  }
+}

@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch
+from sklearn.model_selection import StratifiedKFold
 
 from src.data.synthetic import get_stress_data
 from src.models.orthogonal_learner import (
@@ -65,6 +66,7 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
 
     for n_samples in sample_sizes:
         for seed in config.seeds:
@@ -158,22 +160,60 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
 
 def run_uq(config: SyntheticConfig, n_samples: int = 2000) -> pd.DataFrame:
     """
-    Uncertainty Quantification experiment using MC Dropout and conformal.
+    Uncertainty Quantification experiment using MC Dropout and cross-conformal calibration.
     """
     print("=== Uncertainty Quantification ===")
     rows = []
 
     ctrl_config = CTRLConfig()
+    if FAST_RUN:
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
     n_mc_runs = 20 if FAST_RUN else 50
     alpha = 0.05
-    cal_size = 100
+    epochs = 100 if FAST_RUN else 200
+
+    from src.models.dragonnet import TarNet
+
+    def train_dropout_model(X: np.ndarray, T: np.ndarray, y: np.ndarray, seed: int) -> TarNet:
+        set_seed(seed)
+        model = TarNet(
+            input_dim=X.shape[1],
+            hidden=ctrl_config.hidden_dim,
+            dropout_p=0.5,
+            use_gating=True,
+        ).to(DEVICE)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        X_t = torch.from_numpy(X).float().to(DEVICE)
+        T_t = torch.from_numpy(T).float().to(DEVICE)
+        y_t = torch.from_numpy(y).float().to(DEVICE)
+
+        for _ in range(epochs):
+            model.train()
+            optimizer.zero_grad()
+            y0, y1 = model(X_t)
+            y_pred = y0 * (1 - T_t.view(-1, 1)) + y1 * T_t.view(-1, 1)
+            loss = ((y_pred.squeeze() - y_t) ** 2).mean()
+            loss.backward()
+            optimizer.step()
+        return model
+
+    def mc_dropout_samples(model: TarNet, X_np: np.ndarray, n_runs: int) -> np.ndarray:
+        X_t = torch.from_numpy(X_np).float().to(DEVICE)
+        samples = []
+        model.train()
+        with torch.no_grad():
+            for _ in range(n_runs):
+                y0, y1 = model(X_t)
+                tau = (y1 - y0).squeeze().cpu().numpy()
+                samples.append(tau)
+        return np.array(samples)
 
     for seed in config.seeds:
         print(f"  Seed {seed}...")
         set_seed(seed)
 
         # Generate data
-        X_train, T_train, y_train, _ = get_stress_data(
+        X_train, T_train, y_train, true_te_train = get_stress_data(
             n_samples=n_samples,
             n_noise=config.n_noise,
             seed=seed
@@ -184,45 +224,26 @@ def run_uq(config: SyntheticConfig, n_samples: int = 2000) -> pd.DataFrame:
             seed=seed + 10000
         )
 
-        # Train model with dropout for MC inference
-        from src.models.dragonnet import TarNet
-        model = TarNet(
-            input_dim=X_train.shape[1],
-            hidden=ctrl_config.hidden_dim,
-            dropout_p=0.5,  # Higher dropout for UQ
-            use_gating=True,
-        ).to(DEVICE)
+        k_folds = min(ctrl_config.k_folds, 5)
+        counts = np.bincount(T_train.astype(int), minlength=2)
+        min_count = int(np.min(counts))
+        if min_count < 2:
+            raise ValueError("Need at least two samples per treatment group for conformal UQ.")
+        k_folds = min(k_folds, min_count)
+        skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=seed)
+        oof_residuals = np.zeros(len(X_train), dtype=np.float32)
 
-        # Simple training loop
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        X_t = torch.from_numpy(X_train).float().to(DEVICE)
-        T_t = torch.from_numpy(T_train).float().to(DEVICE)
-        y_t = torch.from_numpy(y_train).float().to(DEVICE)
+        for fold, (tr, val) in enumerate(skf.split(X_train, T_train)):
+            model = train_dropout_model(X_train[tr], T_train[tr], y_train[tr], seed + 100 * (fold + 1))
+            tau_samples = mc_dropout_samples(model, X_train[val], n_mc_runs)
+            tau_mean = tau_samples.mean(axis=0)
+            oof_residuals[val] = np.abs(tau_mean - true_te_train[val])
 
-        epochs = 100 if FAST_RUN else 200
-        for epoch in range(epochs):
-            model.train()
-            optimizer.zero_grad()
-            y0, y1 = model(X_t)
-            y_pred = y0 * (1 - T_t.view(-1, 1)) + y1 * T_t.view(-1, 1)
-            loss = ((y_pred.squeeze() - y_t) ** 2).mean()
-            loss.backward()
-            optimizer.step()
+        q = float(np.quantile(oof_residuals, 1 - alpha))
 
-        # MC Dropout predictions
-        X_test_t = torch.from_numpy(X_test).float().to(DEVICE)
-        tau_samples = []
-
-        model.train()  # Keep dropout active
-        with torch.no_grad():
-            for _ in range(n_mc_runs):
-                y0, y1 = model(X_test_t)
-                tau = (y1 - y0).squeeze().cpu().numpy()
-                tau_samples.append(tau)
-
-        tau_samples = np.array(tau_samples)  # (n_runs, n_test)
+        final_model = train_dropout_model(X_train, T_train, y_train, seed + 999)
+        tau_samples = mc_dropout_samples(final_model, X_test, n_mc_runs)
         tau_mean = tau_samples.mean(axis=0)
-        tau_std = tau_samples.std(axis=0)
 
         # MC Dropout intervals (percentile-based)
         tau_lower = np.percentile(tau_samples, 100 * alpha / 2, axis=0)
@@ -230,11 +251,6 @@ def run_uq(config: SyntheticConfig, n_samples: int = 2000) -> pd.DataFrame:
 
         mc_coverage = np.mean((true_te_test >= tau_lower) & (true_te_test <= tau_upper))
         mc_width = np.mean(tau_upper - tau_lower)
-
-        # Simple conformal calibration
-        cal_idx = np.random.choice(len(X_test), min(cal_size, len(X_test)), replace=False)
-        cal_residuals = np.abs(tau_mean[cal_idx] - true_te_test[cal_idx])
-        q = np.quantile(cal_residuals, 1 - alpha)
 
         conf_lower = tau_mean - q
         conf_upper = tau_mean + q

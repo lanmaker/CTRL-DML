@@ -1,13 +1,19 @@
 """
 Yelp review loader using HuggingFace datasets.
 """
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from pathlib import Path
+import json
+import os
 
 import numpy as np
 
 
-def load_yelp_reviews(n_samples: int = 2000, seed: int = 42) -> Tuple[List[str], np.ndarray]:
+def load_yelp_reviews(
+    n_samples: int = 2000,
+    seed: int = 42,
+    revision: Optional[str] = None,
+) -> Tuple[List[str], np.ndarray]:
     """
     Load Yelp review texts and star ratings.
 
@@ -23,7 +29,13 @@ def load_yelp_reviews(n_samples: int = 2000, seed: int = 42) -> Tuple[List[str],
         raise ImportError("datasets is required for Yelp loader. Install with pip install datasets") from exc
 
     cache_dir = Path(__file__).parents[2] / "data" / "yelp_cache"
-    ds = load_dataset("yelp_review_full", split="train", cache_dir=str(cache_dir))
+    revision = revision or os.environ.get("CTRL_DML_YELP_REVISION")
+    ds = load_dataset(
+        "yelp_review_full",
+        split="train",
+        cache_dir=str(cache_dir),
+        revision=revision,
+    )
 
     rng = np.random.default_rng(seed)
     if n_samples and n_samples < len(ds):
@@ -33,4 +45,17 @@ def load_yelp_reviews(n_samples: int = 2000, seed: int = 42) -> Tuple[List[str],
     texts = ds["text"]
     # Dataset labels are 0-4; convert to 1-5 for interpretability
     ratings = np.array(ds["label"], dtype=np.float32) + 1.0
+    try:
+        manifest = {
+            "dataset": "yelp_review_full",
+            "revision": revision,
+            "fingerprint": getattr(ds, "_fingerprint", None),
+            "num_rows": len(ds),
+            "config_name": getattr(ds.info, "config_name", None),
+            "version": str(getattr(ds.info, "version", None)),
+        }
+        manifest_path = cache_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+    except Exception:
+        pass
     return texts, ratings

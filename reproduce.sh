@@ -14,6 +14,8 @@ set -e  # Exit on error
 
 # Work around OpenMP shared-memory restrictions in constrained environments.
 export KMP_DISABLE_SHM=1
+export KMP_SHM_DISABLE=1
+export MKL_THREADING_LAYER=SEQUENTIAL
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
@@ -109,6 +111,46 @@ python -m src.experiments.realdata --dataset all 2>/dev/null || \
 echo ""
 echo ">>> Generating LaTeX macros"
 python -m src.utils.latex --generate-macros
+
+# Record run metadata for reproducibility
+echo ""
+echo ">>> Recording run metadata"
+python - <<'PY'
+import json
+import os
+import platform
+import subprocess
+from pathlib import Path
+
+def cmd(command: str):
+    try:
+        return subprocess.check_output(command, shell=True, text=True).strip()
+    except Exception:
+        return None
+
+try:
+    import torch
+    torch_cuda = torch.cuda.is_available()
+except Exception:
+    torch_cuda = None
+
+meta = {
+    "timestamp": cmd("date -u +%Y-%m-%dT%H:%M:%SZ"),
+    "python_version": platform.python_version(),
+    "platform": platform.platform(),
+    "git_rev": cmd("git rev-parse HEAD"),
+    "git_status": cmd("git status --porcelain"),
+    "pip_freeze": cmd("python -m pip freeze"),
+    "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+    "torch_cuda_available": torch_cuda,
+    "nvidia_smi": cmd("nvidia-smi -L"),
+    "env_ctrl_dml": {k: v for k, v in os.environ.items() if k.startswith("CTRL_DML_")},
+}
+
+Path("output").mkdir(exist_ok=True)
+Path("output/run_metadata.json").write_text(json.dumps(meta, indent=2))
+print("Saved: output/run_metadata.json")
+PY
 
 # Summary
 END_TIME=$(date +%s)

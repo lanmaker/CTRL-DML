@@ -283,6 +283,7 @@ def _bert_embeddings(
     batch_size: int = 32,
     max_length: int = 32,
     model_name: str = "distilbert-base-uncased",
+    revision: Optional[str] = None,
 ) -> np.ndarray:
     """Compute frozen DistilBERT embeddings (CLS token)."""
     try:
@@ -290,8 +291,9 @@ def _bert_embeddings(
     except ImportError as exc:
         raise ImportError("transformers is required for BERT baselines. Install with pip install transformers") from exc
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).to(DEVICE)
+    revision = revision or os.environ.get("CTRL_DML_BERT_REVISION")
+    tokenizer = AutoTokenizer.from_pretrained(model_name, revision=revision)
+    model = AutoModel.from_pretrained(model_name, revision=revision).to(DEVICE)
     model.eval()
 
     all_embs = []
@@ -320,6 +322,11 @@ def run_benchmark(config: MultimodalConfig) -> pd.DataFrame:
     rows = []
 
     ctrl_config = CTRLConfig()
+    if FAST_RUN:
+        ctrl_config.plugin_epochs = 100
+        ctrl_config.nuisance_epochs = 80
+        ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
     epochs = 100 if FAST_RUN else 200
 
     for seed in config.seeds:
@@ -443,6 +450,11 @@ def run_noise_sweep(config: MultimodalConfig) -> pd.DataFrame:
     noise_levels = [0.0, 0.3, 0.6] if not FAST_RUN else [0.0, 0.5]
     epochs = 100 if FAST_RUN else 200
     ctrl_config = CTRLConfig()
+    if FAST_RUN:
+        ctrl_config.plugin_epochs = 100
+        ctrl_config.nuisance_epochs = 80
+        ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
 
     for p_noise in noise_levels:
         for seed in config.seeds:
@@ -510,12 +522,18 @@ def run_bert_baselines(
     batch_size: int = 32,
     max_length: int = 32,
     model_name: str = "distilbert-base-uncased",
+    revision: Optional[str] = None,
 ) -> pd.DataFrame:
     """Run DistilBERT baselines (frozen embeddings + TARNet/CF)."""
     print("=== Multimodal BERT Baselines ===")
     rows = []
 
     ctrl_config = CTRLConfig()
+    if FAST_RUN:
+        ctrl_config.plugin_epochs = 100
+        ctrl_config.nuisance_epochs = 80
+        ctrl_config.tau_epochs = 150
+        ctrl_config.k_folds = min(3, ctrl_config.k_folds)
     epochs = 100 if FAST_RUN else 200
 
     for seed in config.seeds:
@@ -534,6 +552,7 @@ def run_bert_baselines(
             batch_size=batch_size,
             max_length=max_length,
             model_name=model_name,
+            revision=revision,
         )
 
         X_bert = np.concatenate([X_tab, embeddings], axis=1)
@@ -663,6 +682,7 @@ def main():
     parser.add_argument("--bert-batch-size", type=int, default=32)
     parser.add_argument("--bert-max-length", type=int, default=32)
     parser.add_argument("--bert-model", type=str, default="distilbert-base-uncased")
+    parser.add_argument("--bert-revision", type=str, default=None)
     args = parser.parse_args()
 
     config = MultimodalConfig(seeds=args.seeds, n_samples=args.n_samples)
@@ -697,6 +717,7 @@ def main():
             batch_size=args.bert_batch_size,
             max_length=args.bert_max_length,
             model_name=args.bert_model,
+            revision=args.bert_revision,
         )
         csv_path = output.csv_path("multimodal_bert_baselines")
         bert_df.to_csv(csv_path, index=False)

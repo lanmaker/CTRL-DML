@@ -11,9 +11,11 @@ Example usage:
 """
 from __future__ import annotations
 
+import warnings
 import zipfile
 from pathlib import Path
 from typing import Tuple, List
+import hashlib
 
 import numpy as np
 import pandas as pd
@@ -29,17 +31,48 @@ URLS = {
     "high": "https://www.dropbox.com/s/k2k1cs42i3pzkuu/high_dimensional_datasets.zip?dl=1",
     "test_low": "https://www.dropbox.com/s/qaj6fjbzorzmwpp/TestDatasets_lowD_Dec28.zip?dl=1",
 }
+# SHA256 checksums for integrity verification.
+# To compute: python -c "from src.data.acic import _sha256; print(_sha256(Path('data/acic2019/high.zip')))"
+ZIP_SHA256 = {
+    "low": "c728f9b9fd23fc5f2ee7bcdbb23b84ae49c59106d3466c3c0955e9ef3bcbaba4",
+    "high": "",  # TODO: compute after first download
+    "test_low": "",  # TODO: compute after first download
+}
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify_checksum(path: Path, expected: str, label: str) -> None:
+    if not expected:
+        warnings.warn(
+            f"{label}: no checksum available - integrity not verified. "
+            f"Computed SHA256: {_sha256(path)}",
+            UserWarning,
+            stacklevel=3,
+        )
+        return
+    actual = _sha256(path)
+    if actual != expected:
+        raise ValueError(f"{label} checksum mismatch: expected {expected}, got {actual}")
 
 
 def _download_zip(kind: str) -> Path:
     """Download and cache a ZIP archive."""
     out = ROOT / f"{kind}.zip"
     if out.exists():
+        _verify_checksum(out, ZIP_SHA256.get(kind, ""), f"ACIC {kind} zip")
         return out
     url = URLS[kind]
     resp = requests.get(url, timeout=60)
     resp.raise_for_status()
     out.write_bytes(resp.content)
+    _verify_checksum(out, ZIP_SHA256.get(kind, ""), f"ACIC {kind} zip")
     return out
 
 

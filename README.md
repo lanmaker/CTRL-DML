@@ -29,6 +29,10 @@ All numbers and figures are generated from scripts. After running `./reproduce.s
 - `output/tables/` for raw CSV results.
 - `output/figures/` for regenerated plots.
 - `output/results_macros.tex` for LaTeX macros consumed by `CTRL-DML-Paper/main.tex`.
+- `output/run_metadata.json` for environment + git metadata.
+
+Dataset hashes and sources are tracked in `data/manifest.json`. For HuggingFace artifacts, you can pin revisions via:
+`CTRL_DML_YELP_REVISION` and `CTRL_DML_BERT_REVISION`.
 
 ---
 
@@ -62,6 +66,10 @@ python -m src.experiments.multimodal --experiment all
 python -m src.experiments.multimodal --experiment bert
 python -m src.experiments.yelp_semisynth
 python -m src.experiments.realdata --dataset all
+
+# Repro-focused ATE runs (OOF + refit bootstrap)
+python -m src.experiments.realdata --dataset all --k-folds 5 --bootstrap 30
+python -m src.experiments.public_benchmarks --k-folds 5 --bootstrap 100
 
 # Regenerate LaTeX macros from results
 python -m src.utils.latex --generate-macros

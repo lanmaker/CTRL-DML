@@ -10,14 +10,52 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, List
+import os
+import random
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 
 from .dragonnet import TarNet, TauNet, NuisanceNet, get_device
 
 DEVICE = get_device()
+
+
+def _resolve_k_folds(T: np.ndarray, k_folds: int) -> int:
+    """
+    Ensure k_folds does not exceed the minimum class count.
+
+    StratifiedKFold requires at least k samples per class. This function
+    clips k_folds to a safe value based on treatment group sizes.
+
+    Args:
+        T: Binary treatment array
+        k_folds: Desired number of folds
+
+    Returns:
+        Safe k_folds value (at least 2, at most min_class_count)
+
+    Raises:
+        ValueError: If any treatment group has fewer than 2 samples
+    """
+    counts = [int(np.sum(T == 0)), int(np.sum(T == 1))]
+    min_class = min(counts)
+    if min_class < 2:
+        raise ValueError(
+            f"Need at least 2 samples per treatment group for cross-fitting. "
+            f"Got counts: control={counts[0]}, treated={counts[1]}"
+        )
+    resolved = max(2, min(k_folds, min_class))
+    if resolved < k_folds:
+        import warnings
+        warnings.warn(
+            f"Reducing k_folds from {k_folds} to {resolved} due to small class size "
+            f"(min_class={min_class})",
+            UserWarning,
+            stacklevel=2,
+        )
+    return resolved
 
 
 @dataclass
@@ -34,7 +72,7 @@ class CTRLConfig:
     tau_epochs: int = 360
     lr_plugin: float = 3e-3
     lr_tau: float = 3e-4
-    k_folds: int = 3
+    k_folds: int = 5
     lambda_tau: float = 5e-5
     grad_clip: float = 1.0
     z_clip: float = 5.0
@@ -48,10 +86,14 @@ class CTRLConfig:
 
 def set_seed(seed: int) -> None:
     """Set random seed for reproducibility."""
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def train_plugin(
@@ -149,11 +191,15 @@ def cross_fit_nuisance(
     t_weight: float = 1.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """K-fold cross-fitting for orthogonal residuals."""
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
+    # Resolve k_folds to avoid StratifiedKFold errors with small classes
+    k_folds = _resolve_k_folds(T, k_folds)
+    # Use StratifiedKFold to ensure each fold has both treatment groups
+    T_int = T.astype(int)
+    skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=seed)
     m_hat = np.zeros_like(y, dtype=np.float32)
     e_hat = np.zeros_like(y, dtype=np.float32)
 
-    for fold, (tr, val) in enumerate(kf.split(X)):
+    for fold, (tr, val) in enumerate(skf.split(X, T_int)):
         model = train_nuisance(
             X[tr], y[tr], T[tr],
             use_gating, lambda_sparsity, seed + fold,
