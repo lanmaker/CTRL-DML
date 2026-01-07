@@ -86,7 +86,7 @@ def _estimate_tarnet_oof_ate(
     seed: int,
     k_folds: int,
 ) -> float:
-    """Estimate ATE using OOF TARNet plug-in predictions."""
+    """Estimate ATE using OOF TARNet plug-in predictions (no gating for fair baseline)."""
     k_folds = _resolve_k_folds(T, k_folds)
     skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=seed)
     tau_oof = np.zeros(len(Y), dtype=np.float32)
@@ -95,8 +95,8 @@ def _estimate_tarnet_oof_ate(
         fold_seed = seed + 100 * (fold + 1)
         model = train_plugin(
             X[tr], Y[tr], T[tr],
-            use_gating=ctrl_config.use_gating,
-            lambda_sparsity=ctrl_config.lambda_sparsity,
+            use_gating=False,  # TARNet baseline: no gating
+            lambda_sparsity=0.0,  # No sparsity for vanilla TARNet
             seed=fold_seed,
             dropout_p=ctrl_config.dropout_p,
             hidden_dim=ctrl_config.hidden_tau,

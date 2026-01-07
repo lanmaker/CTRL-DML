@@ -94,12 +94,11 @@ def get_multimodal_data(
     propensity = np.clip(propensity, 0.05, 0.95)
     T = rng.binomial(1, propensity).astype(np.float32)
 
-    # Y depends on combined confounder and T
-    # Y = confounding_effect + treatment_effect + noise
-    # True CATE = 3.0
-    Y = (2.0 * combined_conf + 3.0 * T + rng.normal(0, 0.5, n)).astype(np.float32)
-
-    true_te = np.ones(n, dtype=np.float32) * 3.0
+    # Y depends on combined confounder and T with HETEROGENEOUS treatment effect
+    # CATE(x) = 2.0 + 2.0 * combined_conf, ranging from ~2.0 to ~4.0
+    # This ensures PEHE measures heterogeneous effect estimation, not just noise handling
+    true_te = (2.0 + 2.0 * combined_conf).astype(np.float32)
+    Y = (2.0 * combined_conf + true_te * T + rng.normal(0, 0.5, n)).astype(np.float32)
 
     return X_tab, X_text_indices, Y, T, true_te
 
@@ -131,6 +130,55 @@ def convert_text_to_bow(
 
 # Alias for backward compatibility
 convert_text_to_tfidf = convert_text_to_bow
+
+
+def compute_tfidf_idf(
+    X_text_indices: np.ndarray,
+    vocab_size: int
+) -> np.ndarray:
+    """
+    Compute IDF vector for token indices.
+
+    Args:
+        X_text_indices: Token indices (n, seq_len)
+        vocab_size: Vocabulary size
+
+    Returns:
+        idf vector (vocab_size,)
+    """
+    n_docs = X_text_indices.shape[0]
+    df = np.zeros(vocab_size, dtype=np.float32)
+    for row in X_text_indices:
+        uniq = np.unique(row)
+        df[uniq] += 1.0
+    idf = np.log((1.0 + n_docs) / (1.0 + df)) + 1.0
+    return idf.astype(np.float32)
+
+
+def compute_tfidf_weights(
+    X_text_indices: np.ndarray,
+    idf: np.ndarray
+) -> np.ndarray:
+    """
+    Compute per-token TF-IDF weights for each document.
+
+    Args:
+        X_text_indices: Token indices (n, seq_len)
+        idf: IDF vector (vocab_size,)
+
+    Returns:
+        TF-IDF weights (n, seq_len), normalized per document.
+    """
+    n_docs, seq_len = X_text_indices.shape
+    weights = np.zeros((n_docs, seq_len), dtype=np.float32)
+    vocab_size = idf.shape[0]
+    for i, row in enumerate(X_text_indices):
+        counts = np.bincount(row, minlength=vocab_size).astype(np.float32)
+        tf = counts[row] / float(seq_len)
+        weights[i] = tf * idf[row]
+    norm = weights.sum(axis=1, keepdims=True) + 1e-8
+    weights = weights / norm
+    return weights.astype(np.float32)
 
 
 def get_combined_features(

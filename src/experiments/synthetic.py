@@ -31,6 +31,7 @@ from src.models.orthogonal_learner import (
     predict_tau_rlearner,
     set_seed,
     CTRLConfig,
+    resolve_gate_flags,
 )
 from src.models.dragonnet import MyDragonNet, get_device
 from src.utils.io import get_output_manager
@@ -61,6 +62,8 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
 
     sample_sizes = [500, 1000] if FAST_RUN else [500, 1000, 2000, 5000]
     ctrl_config = CTRLConfig()
+    plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(ctrl_config)
+    warm_start_backbone = plugin_gating == tau_gating
 
     if FAST_RUN:
         ctrl_config.plugin_epochs = 100
@@ -88,7 +91,7 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
             # Train plug-in (warm-start for DML).
             plugin_model = train_plugin(
                 X_train, y_train, T_train,
-                use_gating=ctrl_config.use_gating,
+                use_gating=plugin_gating,
                 lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
                 dropout_p=ctrl_config.dropout_p,
@@ -102,7 +105,7 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
             # Train DML (CTRL)
             m_hat, e_hat = cross_fit_nuisance(
                 X_train, y_train, T_train,
-                use_gating=ctrl_config.use_gating,
+                use_gating=nuisance_gating,
                 lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
                 k_folds=ctrl_config.k_folds,
@@ -114,11 +117,18 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
             e_hat = np.clip(e_hat, 0.01, 0.99)
             R = y_train - m_hat
             W = T_train - e_hat
-            Z, weights = stabilize_residuals(R, W, w_clip=ctrl_config.w_clip, z_clip=ctrl_config.z_clip, eps=ctrl_config.eps)
+            Z, weights = stabilize_residuals(
+                R, W,
+                w_clip=ctrl_config.w_clip,
+                z_clip=ctrl_config.z_clip,
+                eps=ctrl_config.eps,
+                w_clip_quantile=ctrl_config.w_clip_quantile,
+                z_clip_quantile=ctrl_config.z_clip_quantile,
+            )
 
             tau_model = train_rlearner(
                 X_train, Z, weights,
-                use_gating=ctrl_config.use_gating,
+                use_gating=tau_gating,
                 lambda_tau=ctrl_config.lambda_tau,
                 seed=seed,
                 dropout_p=ctrl_config.dropout_p,
@@ -128,6 +138,7 @@ def run_scaling(config: SyntheticConfig) -> pd.DataFrame:
                 lr=ctrl_config.lr_tau,
                 grad_clip=ctrl_config.grad_clip,
                 warm_start_from=plugin_model,
+                warm_start_backbone=warm_start_backbone,
                 teacher_tau=tau_plugin_train,
                 aux_beta_start=ctrl_config.aux_beta_start,
                 aux_beta_end=ctrl_config.aux_beta_end,

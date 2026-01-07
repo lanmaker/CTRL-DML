@@ -25,6 +25,7 @@ from src.models.orthogonal_learner import (
     predict_tau_rlearner,
     set_seed,
     CTRLConfig,
+    resolve_gate_flags,
 )
 from src.utils.io import get_output_manager
 from src.utils.metrics import compute_pehe
@@ -66,6 +67,9 @@ def run_sensitivity(config: SensitivityConfig) -> pd.DataFrame:
         base_config.nuisance_epochs = min(base_config.nuisance_epochs, 120)
         base_config.tau_epochs = min(base_config.tau_epochs, 240)
 
+    plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(base_config)
+    warm_start_backbone = plugin_gating == tau_gating
+
     for lambda_sparsity in config.lambda_grid:
         for dropout_p in config.dropout_grid:
             for seed in config.seeds:
@@ -85,7 +89,7 @@ def run_sensitivity(config: SensitivityConfig) -> pd.DataFrame:
 
                 plugin_model = train_plugin(
                     X_train, y_train, T_train,
-                    use_gating=base_config.use_gating,
+                    use_gating=plugin_gating,
                     lambda_sparsity=lambda_sparsity,
                     seed=seed,
                     dropout_p=dropout_p,
@@ -97,7 +101,7 @@ def run_sensitivity(config: SensitivityConfig) -> pd.DataFrame:
 
                 m_hat, e_hat = cross_fit_nuisance(
                     X_train, y_train, T_train,
-                    use_gating=base_config.use_gating,
+                    use_gating=nuisance_gating,
                     lambda_sparsity=lambda_sparsity,
                     seed=seed,
                     k_folds=base_config.k_folds,
@@ -114,11 +118,13 @@ def run_sensitivity(config: SensitivityConfig) -> pd.DataFrame:
                     w_clip=base_config.w_clip,
                     z_clip=base_config.z_clip,
                     eps=base_config.eps,
+                    w_clip_quantile=base_config.w_clip_quantile,
+                    z_clip_quantile=base_config.z_clip_quantile,
                 )
 
                 tau_model = train_rlearner(
                     X_train, Z, weights,
-                    use_gating=base_config.use_gating,
+                    use_gating=tau_gating,
                     lambda_tau=base_config.lambda_tau,
                     seed=seed,
                     dropout_p=dropout_p,
@@ -128,6 +134,7 @@ def run_sensitivity(config: SensitivityConfig) -> pd.DataFrame:
                     lr=base_config.lr_tau,
                     grad_clip=base_config.grad_clip,
                     warm_start_from=plugin_model,
+                    warm_start_backbone=warm_start_backbone,
                     teacher_tau=tau_plugin_train,
                     aux_beta_start=base_config.aux_beta_start,
                     aux_beta_end=base_config.aux_beta_end,

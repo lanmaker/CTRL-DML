@@ -64,18 +64,23 @@ def get_stress_data(
     T = rng.binomial(1, propensity).astype(np.float32)
 
     # Outcome (depends on C, P, and T, not I or N)
-    if n_confounders >= 2:
-        true_te = (2 * np.sin(C[:, 0] * np.pi) + np.maximum(0, C[:, 1])).astype(np.float32)
-    elif n_confounders == 1:
-        true_te = (2 * np.sin(C[:, 0] * np.pi)).astype(np.float32)
+    # IMPORTANT: true_te depends on PROGNOSTIC features (P), not confounders (C)
+    # This allows the bias/variance test to work properly:
+    # - Dropping C tests debiasing ability (C affects T and baseline Y)
+    # - But heterogeneity (true_te) is still learnable from P
+    if n_prognostic >= 2:
+        true_te = (2.0 + 1.5 * np.sin(P[:, 0] * np.pi) + 0.8 * np.maximum(0, P[:, 1])).astype(np.float32)
+    elif n_prognostic == 1:
+        true_te = (2.0 + 1.5 * np.sin(P[:, 0] * np.pi)).astype(np.float32)
     else:
         true_te = np.ones(n_samples, dtype=np.float32) * 2.0  # Constant treatment effect
 
-    # y0 includes confounders and prognostic features
-    y0_base = np.sum(C, axis=1) ** 2 if n_confounders > 0 else np.zeros(n_samples)
+    # y0 (baseline outcome) includes confounders and prognostic features
+    # Confounders create bias (affect both T via propensity and Y via y0)
+    y0_conf = np.sum(C, axis=1) ** 2 if n_confounders > 0 else np.zeros(n_samples)
     y0_prog = 0.5 * np.sum(P, axis=1) if n_prognostic > 0 else np.zeros(n_samples)
     y0_prog_nl = 0.3 * P[:, 0] ** 2 if n_prognostic > 0 else np.zeros(n_samples)
-    y0 = y0_base + y0_prog + y0_prog_nl + rng.normal(0, 0.5, size=n_samples)
+    y0 = y0_conf + y0_prog + y0_prog_nl + rng.normal(0, 0.5, size=n_samples)
     Y = (y0 + true_te * T).astype(np.float32)
 
     return X, T, Y, true_te

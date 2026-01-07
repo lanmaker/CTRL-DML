@@ -62,6 +62,7 @@ def _resolve_k_folds(T: np.ndarray, k_folds: int) -> int:
 class CTRLConfig:
     """Configuration for CTRL-DML orthogonal learner."""
     use_gating: bool = True
+    gate_mode: str = "nuisance_only"
     lambda_sparsity: float = 0.05
     hidden_dim: int = 120
     hidden_tau: int = 96
@@ -77,11 +78,37 @@ class CTRLConfig:
     grad_clip: float = 1.0
     z_clip: float = 5.0
     w_clip: float = 0.05
+    w_clip_quantile: Optional[float] = 0.05
+    z_clip_quantile: Optional[float] = 0.99
     eps: float = 0.05
     aux_beta_start: float = 0.8
     aux_beta_end: float = 0.3
     aux_decay_epochs: int = 180
     freeze_backbone: bool = False
+
+
+def resolve_gate_flags(cfg: CTRLConfig) -> Tuple[bool, bool, bool]:
+    """
+    Resolve gating flags for (plugin, nuisance, tau) stages.
+
+    gate_mode:
+      - "shared": gating on all stages (if use_gating=True)
+      - "nuisance_only": gating on plugin+nuisance, tau head ungated
+      - "tau_only": gating on plugin+tau, nuisance ungated
+      - "none": gating off for all stages
+    """
+    if not cfg.use_gating:
+        return False, False, False
+    mode = (cfg.gate_mode or "shared").lower()
+    if mode == "shared":
+        return True, True, True
+    if mode == "nuisance_only":
+        return True, True, False
+    if mode == "tau_only":
+        return True, False, True
+    if mode == "none":
+        return False, False, False
+    raise ValueError(f"Unknown gate_mode: {cfg.gate_mode}")
 
 
 def set_seed(seed: int) -> None:
@@ -224,7 +251,9 @@ def stabilize_residuals(
     W: np.ndarray,
     w_clip: float = 0.05,
     z_clip: float = 5.0,
-    eps: float = 0.05
+    eps: float = 0.05,
+    w_clip_quantile: Optional[float] = None,
+    z_clip_quantile: Optional[float] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Return pseudo-outcome Z and weights s for the ratio R-learner.
@@ -237,17 +266,28 @@ def stabilize_residuals(
         w_clip: Minimum |W| for division stability
         z_clip: Clip Z to [-z_clip, z_clip]
         eps: Weight cap, s = min(W^2, eps^2)
+        w_clip_quantile: Optional quantile for adaptive |W| clipping
+        z_clip_quantile: Optional quantile for adaptive |Z| clipping
 
     Returns:
         Z: Pseudo-outcomes (clipped R/W)
         s: Sample weights min(W^2, eps^2)
     """
-    # Ensure |W| >= w_clip for division stability
-    W_safe = np.sign(W) * np.maximum(np.abs(W), w_clip)
+    # Ensure |W| >= w_floor for division stability
+    w_floor = w_clip
+    if w_clip_quantile is not None:
+        w_q = float(np.quantile(np.abs(W), w_clip_quantile))
+        w_floor = max(w_floor, w_q)
+    W_safe = np.sign(W) * np.maximum(np.abs(W), w_floor)
 
     # Compute pseudo-outcome Z = R / W, then clip
     Z = R / W_safe
-    Z = np.clip(Z, -z_clip, z_clip)
+    z_cap = z_clip
+    if z_clip_quantile is not None:
+        z_q = float(np.quantile(np.abs(Z), z_clip_quantile))
+        z_cap = min(z_cap, z_q)
+    z_cap = max(z_cap, 1e-6)
+    Z = np.clip(Z, -z_cap, z_cap)
 
     # Compute weights s = min(W^2, eps^2)
     s = np.minimum(W ** 2, eps ** 2)
@@ -269,6 +309,7 @@ def train_rlearner(
     lr: float = 3e-4,
     grad_clip: float = 0.0,
     warm_start_from: Optional[TarNet] = None,
+    warm_start_backbone: bool = True,
     teacher_tau: Optional[np.ndarray] = None,
     aux_beta_start: float = 0.8,
     aux_beta_end: float = 0.3,
@@ -282,7 +323,8 @@ def train_rlearner(
     model = TauNet(X.shape[1], hidden_dim, dropout_p, use_gating).to(DEVICE)
 
     if warm_start_from is not None:
-        model.backbone.load_state_dict(warm_start_from.backbone.state_dict())
+        if warm_start_backbone:
+            model.backbone.load_state_dict(warm_start_from.backbone.state_dict())
         with torch.no_grad():
             model.head.weight.copy_(warm_start_from.y1.weight - warm_start_from.y0.weight)
             model.head.bias.copy_(warm_start_from.y1.bias - warm_start_from.y0.bias)
@@ -431,11 +473,13 @@ class CTRLOrthogonalLearner:
             self
         """
         cfg = self.config
+        plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(cfg)
+        warm_start_backbone = plugin_gating == tau_gating
 
         # Stage 0: plug-in warm start (use hidden_tau for compatible architecture)
         self.plugin_model = train_plugin(
             X, y, T,
-            use_gating=cfg.use_gating,
+            use_gating=plugin_gating,
             lambda_sparsity=cfg.lambda_sparsity,
             seed=seed,
             dropout_p=cfg.dropout_p,
@@ -448,7 +492,7 @@ class CTRLOrthogonalLearner:
         # Stage 1: cross-fitted nuisances
         m_hat, e_hat = cross_fit_nuisance(
             X, y, T,
-            use_gating=cfg.use_gating,
+            use_gating=nuisance_gating,
             lambda_sparsity=cfg.lambda_sparsity,
             seed=seed,
             k_folds=cfg.k_folds,
@@ -459,12 +503,19 @@ class CTRLOrthogonalLearner:
         )
         e_hat = np.clip(e_hat, 0.01, 0.99)
         R, W = y - m_hat, T - e_hat
-        Z, weights = stabilize_residuals(R, W, w_clip=cfg.w_clip, z_clip=cfg.z_clip, eps=cfg.eps)
+        Z, weights = stabilize_residuals(
+            R, W,
+            w_clip=cfg.w_clip,
+            z_clip=cfg.z_clip,
+            eps=cfg.eps,
+            w_clip_quantile=cfg.w_clip_quantile,
+            z_clip_quantile=cfg.z_clip_quantile,
+        )
 
         # Stage 2: orthogonal tau head with optional distillation
         self.tau_model = train_rlearner(
             X, Z, weights,
-            use_gating=cfg.use_gating,
+            use_gating=tau_gating,
             lambda_tau=cfg.lambda_tau,
             seed=seed,
             dropout_p=cfg.dropout_p,
@@ -474,6 +525,7 @@ class CTRLOrthogonalLearner:
             lr=cfg.lr_tau,
             grad_clip=cfg.grad_clip,
             warm_start_from=self.plugin_model,
+            warm_start_backbone=warm_start_backbone,
             teacher_tau=predict_tau_tarnet(self.plugin_model, X),
             aux_beta_start=cfg.aux_beta_start,
             aux_beta_end=cfg.aux_beta_end,

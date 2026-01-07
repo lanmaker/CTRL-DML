@@ -28,6 +28,7 @@ from src.models.orthogonal_learner import (
     predict_tau_rlearner,
     set_seed,
     CTRLConfig,
+    resolve_gate_flags,
 )
 from src.utils.io import get_output_manager
 from src.utils.metrics import compute_pehe
@@ -63,6 +64,10 @@ def run_nuisance_misspecification(config: RobustnessConfig) -> pd.DataFrame:
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
         ctrl_config.k_folds = min(3, ctrl_config.k_folds)
+    plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(ctrl_config)
+    warm_start_backbone = plugin_gating == tau_gating
+    plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(ctrl_config)
+    warm_start_backbone = plugin_gating == tau_gating
 
     for seed in config.seeds:
         print(f"  Seed {seed}...")
@@ -81,47 +86,68 @@ def run_nuisance_misspecification(config: RobustnessConfig) -> pd.DataFrame:
         )
 
         for strength in ["strong", "weak"]:
-            # Adjust nuisance model complexity
-            hidden = ctrl_config.hidden_dim if strength == "strong" else 32
-            epochs = ctrl_config.nuisance_epochs if strength == "strong" else 30
+            # Adjust model complexity for BOTH plugin and nuisance
+            # This properly tests DML robustness to weak first-stage estimators
+            if strength == "strong":
+                hidden_nuis = ctrl_config.hidden_dim
+                epochs_nuis = ctrl_config.nuisance_epochs
+                hidden_plugin = ctrl_config.hidden_tau
+                epochs_plugin = ctrl_config.plugin_epochs
+                aux_beta = ctrl_config.aux_beta_start  # Normal distillation
+            else:
+                hidden_nuis = 32
+                epochs_nuis = 30
+                hidden_plugin = 32  # Also weaken plugin
+                epochs_plugin = 50  # Fewer epochs for plugin too
+                aux_beta = 0.0  # NO distillation when weak - let DML be independent
 
-            # Train plugin
+            # Train plugin (also weakened when strength="weak")
             plugin_model = train_plugin(
                 X_train, y_train, T_train,
-                use_gating=ctrl_config.use_gating,
+                use_gating=plugin_gating,
                 lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
                 dropout_p=ctrl_config.dropout_p,
-                hidden_dim=ctrl_config.hidden_tau,
+                hidden_dim=hidden_plugin,
                 batch_size=ctrl_config.batch_size,
-                epochs=ctrl_config.plugin_epochs,
+                epochs=epochs_plugin,
             )
             tau_plugin_test = predict_tau_tarnet(plugin_model, X_test)
             tau_plugin_train = predict_tau_tarnet(plugin_model, X_train)
 
-            # Cross-fit nuisances
+            # Cross-fit nuisances (weakened when strength="weak")
             m_hat, e_hat = cross_fit_nuisance(
                 X_train, y_train, T_train,
-                use_gating=ctrl_config.use_gating,
+                use_gating=nuisance_gating,
                 lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
                 k_folds=ctrl_config.k_folds,
                 dropout_p=ctrl_config.dropout_p,
-                hidden_dim=hidden,
+                hidden_dim=hidden_nuis,
                 batch_size=ctrl_config.batch_size,
-                epochs=epochs,
+                epochs=epochs_nuis,
             )
             e_hat = np.clip(e_hat, 0.01, 0.99)
 
             # Compute pseudo-outcomes
             R = y_train - m_hat
             W = T_train - e_hat
-            Z, weights = stabilize_residuals(R, W, w_clip=ctrl_config.w_clip, z_clip=ctrl_config.z_clip, eps=ctrl_config.eps)
+            Z, weights = stabilize_residuals(
+                R, W,
+                w_clip=ctrl_config.w_clip,
+                z_clip=ctrl_config.z_clip,
+                eps=ctrl_config.eps,
+                w_clip_quantile=ctrl_config.w_clip_quantile,
+                z_clip_quantile=ctrl_config.z_clip_quantile,
+            )
 
             # Train R-learner
+            # When weak: no warm_start (dimension mismatch), no distillation (test DML independence)
+            # When strong: use warm_start + distillation (full CTRL-DML)
+            use_warm_start = strength == "strong"
             tau_model = train_rlearner(
                 X_train, Z, weights,
-                use_gating=ctrl_config.use_gating,
+                use_gating=tau_gating,
                 lambda_tau=ctrl_config.lambda_tau,
                 seed=seed,
                 dropout_p=ctrl_config.dropout_p,
@@ -130,10 +156,11 @@ def run_nuisance_misspecification(config: RobustnessConfig) -> pd.DataFrame:
                 epochs=ctrl_config.tau_epochs,
                 lr=ctrl_config.lr_tau,
                 grad_clip=ctrl_config.grad_clip,
-                warm_start_from=plugin_model,
-                teacher_tau=tau_plugin_train,
-                aux_beta_start=ctrl_config.aux_beta_start,
-                aux_beta_end=ctrl_config.aux_beta_end,
+                warm_start_from=plugin_model if use_warm_start else None,
+                warm_start_backbone=warm_start_backbone if use_warm_start else False,
+                teacher_tau=tau_plugin_train if use_warm_start else None,
+                aux_beta_start=aux_beta,
+                aux_beta_end=ctrl_config.aux_beta_end if strength == "strong" else 0.0,
                 aux_decay_epochs=ctrl_config.aux_decay_epochs,
             )
             tau_pred_test = predict_tau_rlearner(tau_model, X_test)
@@ -170,6 +197,8 @@ def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
         ctrl_config.nuisance_epochs = 80
         ctrl_config.tau_epochs = 150
         ctrl_config.k_folds = min(3, ctrl_config.k_folds)
+    plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(ctrl_config)
+    warm_start_backbone = plugin_gating == tau_gating
 
     for seed in config.seeds:
         print(f"  Seed {seed}...")
@@ -209,7 +238,7 @@ def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
             # Train plugin
             plugin_model = train_plugin(
                 X_train, y_train, T_train,
-                use_gating=ctrl_config.use_gating,
+                use_gating=plugin_gating,
                 lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
                 dropout_p=ctrl_config.dropout_p,
@@ -223,7 +252,7 @@ def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
             # Train DML
             m_hat, e_hat = cross_fit_nuisance(
                 X_train, y_train, T_train,
-                use_gating=ctrl_config.use_gating,
+                use_gating=nuisance_gating,
                 lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
                 k_folds=ctrl_config.k_folds,
@@ -235,11 +264,18 @@ def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
             e_hat = np.clip(e_hat, 0.01, 0.99)
             R = y_train - m_hat
             W = T_train - e_hat
-            Z, weights = stabilize_residuals(R, W, w_clip=ctrl_config.w_clip, z_clip=ctrl_config.z_clip, eps=ctrl_config.eps)
+            Z, weights = stabilize_residuals(
+                R, W,
+                w_clip=ctrl_config.w_clip,
+                z_clip=ctrl_config.z_clip,
+                eps=ctrl_config.eps,
+                w_clip_quantile=ctrl_config.w_clip_quantile,
+                z_clip_quantile=ctrl_config.z_clip_quantile,
+            )
 
             tau_model = train_rlearner(
                 X_train, Z, weights,
-                use_gating=ctrl_config.use_gating,
+                use_gating=tau_gating,
                 lambda_tau=ctrl_config.lambda_tau,
                 seed=seed,
                 dropout_p=ctrl_config.dropout_p,
@@ -249,6 +285,7 @@ def run_bias_variance(config: RobustnessConfig) -> pd.DataFrame:
                 lr=ctrl_config.lr_tau,
                 grad_clip=ctrl_config.grad_clip,
                 warm_start_from=plugin_model,
+                warm_start_backbone=warm_start_backbone,
                 teacher_tau=tau_plugin_train,
                 aux_beta_start=ctrl_config.aux_beta_start,
                 aux_beta_end=ctrl_config.aux_beta_end,

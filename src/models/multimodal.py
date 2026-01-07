@@ -7,7 +7,7 @@ This module contains:
 """
 import torch
 import torch.nn as nn
-from typing import Tuple
+from typing import Tuple, Optional
 
 from .dragonnet import TabularAttention
 
@@ -129,12 +129,14 @@ class MultimodalCTRL(nn.Module):
     def forward(
         self,
         x_tab: torch.Tensor,
-        x_text: torch.Tensor
+        x_text: torch.Tensor,
+        text_weights: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             x_tab: Tabular features (B, n_tab)
             x_text: Text token indices (B, seq_len)
+            text_weights: Optional TF-IDF weights (B, seq_len)
 
         Returns:
             Tuple of (y0_pred, y1_pred, t_prob)
@@ -142,7 +144,12 @@ class MultimodalCTRL(nn.Module):
         h_tab = self.tab_tower(x_tab)
 
         if self.fusion_type == "bag":
-            h_text = self.text_pool(x_text)
+            if text_weights is None:
+                h_text = self.text_pool(x_text)
+            else:
+                tok = self.text_pool.weight[x_text]
+                w = text_weights.unsqueeze(-1)
+                h_text = (tok * w).sum(dim=1) / (w.sum(dim=1) + 1e-8)
             h_text = self.text_proj(h_text)
         else:
             # Embed tokens and apply cross-attention
@@ -160,9 +167,14 @@ class MultimodalCTRL(nn.Module):
 
         return y0, y1, t_prob
 
-    def predict_cate(self, x_tab: torch.Tensor, x_text: torch.Tensor) -> torch.Tensor:
+    def predict_cate(
+        self,
+        x_tab: torch.Tensor,
+        x_text: torch.Tensor,
+        text_weights: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Predict CATE = E[Y(1) - Y(0) | X]."""
-        y0, y1, _ = self.forward(x_tab, x_text)
+        y0, y1, _ = self.forward(x_tab, x_text, text_weights=text_weights)
         return (y1 - y0).squeeze(-1)
 
     @property

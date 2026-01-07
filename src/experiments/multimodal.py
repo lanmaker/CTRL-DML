@@ -21,7 +21,12 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 
-from src.data.multimodal import get_multimodal_data, get_combined_features
+from src.data.multimodal import (
+    get_multimodal_data,
+    get_combined_features,
+    compute_tfidf_idf,
+    compute_tfidf_weights,
+)
 from src.models.multimodal import MultimodalCTRL
 from src.models.orthogonal_learner import (
     train_plugin,
@@ -32,6 +37,7 @@ from src.models.orthogonal_learner import (
     predict_tau_rlearner,
     set_seed,
     CTRLConfig,
+    resolve_gate_flags,
 )
 from src.models.dragonnet import get_device
 from src.utils.io import get_output_manager
@@ -163,6 +169,7 @@ def train_multimodal_ctrl(
     T: np.ndarray,
     vocab_size: int,
     fusion: str = "bag",
+    text_weights: Optional[np.ndarray] = None,
     epochs: int = 200,
     lr: float = 1e-3,
     seed: int = 42,
@@ -175,13 +182,16 @@ def train_multimodal_ctrl(
 
     X_tab_t = torch.from_numpy(X_tab).float().to(DEVICE)
     X_text_t = torch.from_numpy(X_text).long().to(DEVICE)
+    text_weights_t = None
+    if text_weights is not None:
+        text_weights_t = torch.from_numpy(text_weights).float().to(DEVICE)
     Y_t = torch.from_numpy(Y).float().to(DEVICE)
     T_t = torch.from_numpy(T).float().to(DEVICE)
 
     for _ in range(epochs):
         model.train()
         optimizer.zero_grad()
-        y0, y1, t_prob = model(X_tab_t, X_text_t)
+        y0, y1, t_prob = model(X_tab_t, X_text_t, text_weights=text_weights_t)
         y_pred = y0.squeeze() * (1 - T_t) + y1.squeeze() * T_t
         loss_y = ((y_pred - Y_t) ** 2).mean()
         loss_t = nn.functional.binary_cross_entropy(t_prob.squeeze(), T_t)
@@ -192,13 +202,21 @@ def train_multimodal_ctrl(
     return model
 
 
-def predict_multimodal_ctrl_tau(model: MultimodalCTRL, X_tab: np.ndarray, X_text: np.ndarray) -> np.ndarray:
+def predict_multimodal_ctrl_tau(
+    model: MultimodalCTRL,
+    X_tab: np.ndarray,
+    X_text: np.ndarray,
+    text_weights: Optional[np.ndarray] = None
+) -> np.ndarray:
     """Predict CATE from MultimodalCTRL."""
     model.eval()
     with torch.no_grad():
         X_tab_t = torch.from_numpy(X_tab).float().to(DEVICE)
         X_text_t = torch.from_numpy(X_text).long().to(DEVICE)
-        y0, y1, _ = model(X_tab_t, X_text_t)
+        text_weights_t = None
+        if text_weights is not None:
+            text_weights_t = torch.from_numpy(text_weights).float().to(DEVICE)
+        y0, y1, _ = model(X_tab_t, X_text_t, text_weights=text_weights_t)
         tau = (y1 - y0).squeeze().cpu().numpy()
     return tau
 
@@ -213,9 +231,11 @@ def run_ctrl_dml_combined(
     seed: int,
 ) -> Tuple[float, float]:
     """Run CTRL-DML on combined tabular + BoW features."""
+    plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(ctrl_config)
+    warm_start_backbone = plugin_gating == tau_gating
     plugin_model = train_plugin(
         X_train, Y_train, T_train,
-        use_gating=ctrl_config.use_gating,
+        use_gating=plugin_gating,
         lambda_sparsity=ctrl_config.lambda_sparsity,
         seed=seed,
         dropout_p=ctrl_config.dropout_p,
@@ -228,7 +248,7 @@ def run_ctrl_dml_combined(
 
     m_hat, e_hat = cross_fit_nuisance(
         X_train, Y_train, T_train,
-        use_gating=ctrl_config.use_gating,
+        use_gating=nuisance_gating,
         lambda_sparsity=ctrl_config.lambda_sparsity,
         seed=seed,
         k_folds=ctrl_config.k_folds,
@@ -240,11 +260,18 @@ def run_ctrl_dml_combined(
     e_hat = np.clip(e_hat, 0.01, 0.99)
     R = Y_train - m_hat
     W = T_train - e_hat
-    Z, weights = stabilize_residuals(R, W, w_clip=ctrl_config.w_clip, z_clip=ctrl_config.z_clip, eps=ctrl_config.eps)
+    Z, weights = stabilize_residuals(
+        R, W,
+        w_clip=ctrl_config.w_clip,
+        z_clip=ctrl_config.z_clip,
+        eps=ctrl_config.eps,
+        w_clip_quantile=ctrl_config.w_clip_quantile,
+        z_clip_quantile=ctrl_config.z_clip_quantile,
+    )
 
     tau_model = train_rlearner(
         X_train, Z, weights,
-        use_gating=ctrl_config.use_gating,
+        use_gating=tau_gating,
         lambda_tau=ctrl_config.lambda_tau,
         seed=seed,
         dropout_p=ctrl_config.dropout_p,
@@ -254,6 +281,7 @@ def run_ctrl_dml_combined(
         lr=ctrl_config.lr_tau,
         grad_clip=ctrl_config.grad_clip,
         warm_start_from=plugin_model,
+        warm_start_backbone=warm_start_backbone,
         teacher_tau=tau_plugin_train,
         aux_beta_start=ctrl_config.aux_beta_start,
         aux_beta_end=ctrl_config.aux_beta_end,
@@ -322,6 +350,7 @@ def run_benchmark(config: MultimodalConfig) -> pd.DataFrame:
     rows = []
 
     ctrl_config = CTRLConfig()
+    plugin_gating, _, _ = resolve_gate_flags(ctrl_config)
     if FAST_RUN:
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
@@ -351,6 +380,10 @@ def run_benchmark(config: MultimodalConfig) -> pd.DataFrame:
         Y_train, T_train = Y[train_idx], T[train_idx]
         true_te_test = true_te[test_idx]
 
+        idf = compute_tfidf_idf(X_text_train, config.vocab_size)
+        text_weights_train = compute_tfidf_weights(X_text_train, idf)
+        text_weights_test = compute_tfidf_weights(X_text_test, idf)
+
         # Method 1: Multimodal TarNet (dense fusion, plug-in)
         mm_model = train_multimodal_tarnet(
             X_tab_train, X_text_train, Y_train, T_train,
@@ -366,11 +399,14 @@ def run_benchmark(config: MultimodalConfig) -> pd.DataFrame:
             X_tab_train, X_text_train, Y_train, T_train,
             vocab_size=config.vocab_size,
             fusion="bag",
+            text_weights=text_weights_train,
             epochs=epochs,
             seed=seed,
             lambda_sparsity=ctrl_config.lambda_sparsity,
         )
-        tau_ctrl_bag = predict_multimodal_ctrl_tau(ctrl_bag, X_tab_test, X_text_test)
+        tau_ctrl_bag = predict_multimodal_ctrl_tau(
+            ctrl_bag, X_tab_test, X_text_test, text_weights=text_weights_test
+        )
         pehe_ctrl_bag = compute_pehe(tau_ctrl_bag, true_te_test)
 
         # Method 1c: Cross-attention CTRL
@@ -388,7 +424,7 @@ def run_benchmark(config: MultimodalConfig) -> pd.DataFrame:
         # Method 2: Tabular-only CTRL (ignores text)
         plugin_model = train_plugin(
             X_tab_train, Y_train, T_train,
-            use_gating=ctrl_config.use_gating,
+            use_gating=plugin_gating,
             lambda_sparsity=ctrl_config.lambda_sparsity,
             seed=seed,
             dropout_p=ctrl_config.dropout_p,
@@ -450,6 +486,7 @@ def run_noise_sweep(config: MultimodalConfig) -> pd.DataFrame:
     noise_levels = [0.0, 0.3, 0.6] if not FAST_RUN else [0.0, 0.5]
     epochs = 100 if FAST_RUN else 200
     ctrl_config = CTRLConfig()
+    plugin_gating, _, _ = resolve_gate_flags(ctrl_config)
     if FAST_RUN:
         ctrl_config.plugin_epochs = 100
         ctrl_config.nuisance_epochs = 80
@@ -480,28 +517,34 @@ def run_noise_sweep(config: MultimodalConfig) -> pd.DataFrame:
             Y_train, T_train = Y[train_idx], T[train_idx]
             true_te_test = true_te[test_idx]
 
+            idf = compute_tfidf_idf(X_text_train, config.vocab_size)
+            text_weights_train = compute_tfidf_weights(X_text_train, idf)
+            text_weights_test = compute_tfidf_weights(X_text_test, idf)
+
             # Multimodal CTRL bag-of-embeddings
             mm_model = train_multimodal_ctrl(
                 X_tab_train, X_text_train, Y_train, T_train,
                 vocab_size=config.vocab_size,
                 fusion="bag",
+                text_weights=text_weights_train,
                 epochs=epochs,
                 seed=seed,
                 lambda_sparsity=ctrl_config.lambda_sparsity,
             )
-            tau_mm = predict_multimodal_ctrl_tau(mm_model, X_tab_test, X_text_test)
+            tau_mm = predict_multimodal_ctrl_tau(
+                mm_model, X_tab_test, X_text_test, text_weights=text_weights_test
+            )
             pehe_mm = compute_pehe(tau_mm, true_te_test)
 
             # Tabular-only baseline
-            cfg = CTRLConfig()
             plugin = train_plugin(
                 X_tab_train, Y_train, T_train,
-                use_gating=cfg.use_gating,
-                lambda_sparsity=cfg.lambda_sparsity,
+                use_gating=plugin_gating,
+                lambda_sparsity=ctrl_config.lambda_sparsity,
                 seed=seed,
-                dropout_p=cfg.dropout_p,
-                hidden_dim=cfg.hidden_tau,
-                batch_size=cfg.batch_size,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
                 epochs=100
             )
             tau_tab = predict_tau_tarnet(plugin, X_tab_test)
@@ -566,10 +609,11 @@ def run_bert_baselines(
         Y_train, T_train = Y[train_idx], T[train_idx]
         true_te_test = true_te[test_idx]
 
+        # BERT TARNet baseline: no gating for fair comparison
         plugin_model = train_plugin(
             X_train, Y_train, T_train,
-            use_gating=ctrl_config.use_gating,
-            lambda_sparsity=ctrl_config.lambda_sparsity,
+            use_gating=False,  # TARNet baseline: no gating
+            lambda_sparsity=0.0,  # No sparsity for vanilla TARNet
             seed=seed,
             dropout_p=ctrl_config.dropout_p,
             hidden_dim=ctrl_config.hidden_tau,

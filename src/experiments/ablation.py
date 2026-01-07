@@ -53,13 +53,18 @@ class AblationVariant:
     name: str
     use_gating: bool
     lambda_sparsity: float
+    # Distillation parameters (None means use global config)
+    aux_beta_start: Optional[float] = None
+    aux_beta_end: Optional[float] = None
 
 
 # Standard ablation variants
+# Note: gating_L1_no_distill tests DML independence from plugin (no knowledge distillation)
 ABLATION_VARIANTS = [
     AblationVariant("no_gating", False, 0.0),
     AblationVariant("gating_no_L1", True, 0.0),
     AblationVariant("gating_L1", True, 0.05),
+    AblationVariant("gating_L1_no_distill", True, 0.05, aux_beta_start=0.0, aux_beta_end=0.0),
 ]
 
 
@@ -123,10 +128,16 @@ def run_single_experiment(
         R, W,
         w_clip=config["w_clip"],
         z_clip=config["z_clip"],
-        eps=config["eps"]
+        eps=config["eps"],
+        w_clip_quantile=config["w_clip_quantile"],
+        z_clip_quantile=config["z_clip_quantile"],
     )
 
     # Stage 2: Orthogonal R-learner on training data
+    # Use variant-specific distillation params if provided, else global config
+    aux_beta_start = variant.aux_beta_start if variant.aux_beta_start is not None else config["aux_beta_start"]
+    aux_beta_end = variant.aux_beta_end if variant.aux_beta_end is not None else config["aux_beta_end"]
+
     tau_model = train_rlearner(
         X_train, Z, weights,
         use_gating=variant.use_gating,
@@ -140,8 +151,8 @@ def run_single_experiment(
         grad_clip=config["grad_clip"],
         warm_start_from=plugin_model,
         teacher_tau=tau_plugin_train,
-        aux_beta_start=config["aux_beta_start"],
-        aux_beta_end=config["aux_beta_end"],
+        aux_beta_start=aux_beta_start,
+        aux_beta_end=aux_beta_end,
         aux_decay_epochs=config["aux_decay_epochs"],
         freeze_backbone=config["freeze_backbone"],
     )
@@ -156,6 +167,8 @@ def run_single_experiment(
         "variant": variant.name,
         "use_gating": int(variant.use_gating),
         "lambda_sparsity": variant.lambda_sparsity,
+        "aux_beta_start": aux_beta_start,
+        "aux_beta_end": aux_beta_end,
         "seed": seed,
         "pehe_dml": pehe_orth,
         "pehe_plugin": pehe_plugin,
@@ -291,8 +304,12 @@ def main():
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--w-clip", type=float, default=0.05,
                         help="Minimum |W| for division stability")
+    parser.add_argument("--w-clip-quantile", type=float, default=0.05,
+                        help="Adaptive |W| quantile floor")
     parser.add_argument("--z-clip", type=float, default=5.0,
                         help="Pseudo-outcome clipping")
+    parser.add_argument("--z-clip-quantile", type=float, default=0.99,
+                        help="Adaptive |Z| quantile cap")
     parser.add_argument("--eps", type=float, default=0.05,
                         help="Weight upper bound")
     parser.add_argument("--aux-beta-start", type=float, default=0.8,
@@ -322,7 +339,9 @@ def main():
         "plugin_lr": args.plugin_lr,
         "grad_clip": args.grad_clip,
         "w_clip": args.w_clip,
+        "w_clip_quantile": args.w_clip_quantile,
         "z_clip": args.z_clip,
+        "z_clip_quantile": args.z_clip_quantile,
         "eps": args.eps,
         "aux_beta_start": args.aux_beta_start,
         "aux_beta_end": args.aux_beta_end,

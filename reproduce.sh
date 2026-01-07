@@ -33,7 +33,8 @@ echo "========================================"
 echo ""
 
 # Create output directories
-mkdir -p output/figures output/tables
+OUTPUT_DIR="output"
+mkdir -p "${OUTPUT_DIR}/figures" "${OUTPUT_DIR}/tables"
 
 # Track start time
 START_TIME=$(date +%s)
@@ -104,8 +105,17 @@ run_experiment "Sensitivity Heatmap" \
 # Real data (may fail if datasets not available)
 echo ""
 echo ">>> Running: Real Data Experiments (may skip if data unavailable)"
-python -m src.experiments.realdata --dataset all 2>/dev/null || \
-    echo "    Skipped: Real data not available (install econml for LaLonde)"
+REALDATA_LOG="${OUTPUT_DIR}/realdata_run.log"
+if python -m src.experiments.realdata --dataset all 2>&1 | tee "$REALDATA_LOG"; then
+    echo "    Real data experiments completed successfully"
+else
+    echo "    WARNING: Real data experiments failed or partially failed"
+    echo "    See log: $REALDATA_LOG"
+    echo "    Reason: $(tail -3 "$REALDATA_LOG" | head -1)"
+    # Record skip in metadata
+    echo "realdata_skipped: true" >> "${OUTPUT_DIR}/skip_reasons.txt"
+    echo "realdata_log: $REALDATA_LOG" >> "${OUTPUT_DIR}/skip_reasons.txt"
+fi
 
 # Generate LaTeX macros from all results
 echo ""

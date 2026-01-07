@@ -1,6 +1,7 @@
 """
 LaTeX table and macro generation utilities for CTRL-DML.
 """
+import ast
 import math
 import pandas as pd
 from pathlib import Path
@@ -274,6 +275,30 @@ def _try_read_csv(csv_dir: Path, *filenames: str) -> Optional[pd.DataFrame]:
     return None
 
 
+def _load_ctrl_config_defaults() -> Optional[Dict[str, Any]]:
+    """Parse CTRLConfig defaults without importing torch."""
+    config_path = Path(__file__).resolve().parents[1] / "models" / "orthogonal_learner.py"
+    try:
+        source = config_path.read_text()
+    except Exception:
+        return None
+    try:
+        tree = ast.parse(source)
+    except Exception:
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "CTRLConfig":
+            defaults: Dict[str, Any] = {}
+            for stmt in node.body:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.value is not None:
+                    try:
+                        defaults[stmt.target.id] = ast.literal_eval(stmt.value)
+                    except Exception:
+                        continue
+            return defaults
+    return None
+
+
 def generate_all_macros(output_dir: Path, csv_dir: Optional[Path] = None) -> Path:
     """
     Generate all macros from available CSV results.
@@ -333,26 +358,32 @@ def generate_all_macros(output_dir: Path, csv_dir: Optional[Path] = None) -> Pat
     df = _try_read_csv(csv_dir, "benchmark_results.csv")
     if df is not None and len(df) > 0 and "dataset" in df.columns:
         # IHDP - PEHE metrics (paper uses IHDP prefix)
+        # Note: CSV columns are pehe_dml and pehe_tarnet (not pehe_plugin)
         ihdp = df[df["dataset"] == "ihdp"]
         if len(ihdp) > 0:
+            # Determine which column name is used for plug-in/TARNet
+            tarnet_col = "pehe_tarnet" if "pehe_tarnet" in ihdp.columns else "pehe_plugin"
             if "pehe_dml_mean" in ihdp.columns:
+                tarnet_mean_col = "pehe_tarnet_mean" if "pehe_tarnet_mean" in ihdp.columns else "pehe_plugin_mean"
+                tarnet_std_col = "pehe_tarnet_std" if "pehe_tarnet_std" in ihdp.columns else "pehe_plugin_std"
                 gen.add("IHDPCtrlPehe", ihdp["pehe_dml_mean"].mean(), "IHDP Benchmark")
                 gen.add("IHDPCtrlStd", ihdp["pehe_dml_std"].mean(), "IHDP Benchmark")
-                gen.add("IHDPCfPehe", ihdp["pehe_plugin_mean"].mean(), "IHDP Benchmark")
-                gen.add("IHDPCfStd", ihdp["pehe_plugin_std"].mean(), "IHDP Benchmark")
+                gen.add("IHDPCfPehe", ihdp[tarnet_mean_col].mean(), "IHDP Benchmark")
+                gen.add("IHDPCfStd", ihdp[tarnet_std_col].mean(), "IHDP Benchmark")
             elif "pehe_dml" in ihdp.columns:
                 gen.add("IHDPCtrlPehe", ihdp["pehe_dml"].mean(), "IHDP Benchmark")
                 gen.add("IHDPCtrlStd", ihdp["pehe_dml"].std(), "IHDP Benchmark")
-                gen.add("IHDPCfPehe", ihdp["pehe_plugin"].mean(), "IHDP Benchmark")
-                gen.add("IHDPCfStd", ihdp["pehe_plugin"].std(), "IHDP Benchmark")
-            # Paper-facing macros (mean/std/median/IQR for plug-in vs DML)
-            plugin = ihdp["pehe_plugin"].dropna()
-            dml = ihdp["pehe_dml"].dropna()
-            if len(plugin) > 0:
-                gen.add("IhdpPluginPehe", plugin.mean(), "IHDP Benchmark")
-                gen.add("IhdpPluginStd", plugin.std(), "IHDP Benchmark")
-                gen.add("IhdpPluginMedian", plugin.median(), "IHDP Benchmark")
-                gen.add("IhdpPluginIqr", plugin.quantile(0.75) - plugin.quantile(0.25), "IHDP Benchmark")
+                if tarnet_col in ihdp.columns:
+                    gen.add("IHDPCfPehe", ihdp[tarnet_col].mean(), "IHDP Benchmark")
+                    gen.add("IHDPCfStd", ihdp[tarnet_col].std(), "IHDP Benchmark")
+            # Paper-facing macros (mean/std/median/IQR for plug-in/TARNet vs DML)
+            tarnet = ihdp[tarnet_col].dropna() if tarnet_col in ihdp.columns else pd.Series(dtype=float)
+            dml = ihdp["pehe_dml"].dropna() if "pehe_dml" in ihdp.columns else pd.Series(dtype=float)
+            if len(tarnet) > 0:
+                gen.add("IhdpPluginPehe", tarnet.mean(), "IHDP Benchmark")
+                gen.add("IhdpPluginStd", tarnet.std(), "IHDP Benchmark")
+                gen.add("IhdpPluginMedian", tarnet.median(), "IHDP Benchmark")
+                gen.add("IhdpPluginIqr", tarnet.quantile(0.75) - tarnet.quantile(0.25), "IHDP Benchmark")
             if len(dml) > 0:
                 gen.add("IhdpDmlPehe", dml.mean(), "IHDP Benchmark")
                 gen.add("IhdpDmlStd", dml.std(), "IHDP Benchmark")
@@ -593,6 +624,8 @@ def generate_all_macros(output_dir: Path, csv_dir: Optional[Path] = None) -> Pat
                     method = "Cf"
                 elif method_norm in {"ctrldml", "ctrl"}:
                     method = "Ctrl"
+                elif method_norm == "tarnet":
+                    method = "Tarnet"
                 else:
                     method = method_raw.replace(" ", "")
                 gen.add(f"{prefix}{method}Ate", row["ate"], f"{prefix} Real Data")
@@ -602,7 +635,7 @@ def generate_all_macros(output_dir: Path, csv_dir: Optional[Path] = None) -> Pat
 
     # Ensure ATE macros exist for expected datasets/methods.
     for prefix in ["Lalonde", "Star"]:
-        for method in ["Ols", "Cf", "Ctrl"]:
+        for method in ["Ols", "Cf", "Ctrl", "Tarnet"]:
             for suffix in ["Ate", "CiLo", "CiHi"]:
                 key = f"{prefix}{method}{suffix}"
                 if key not in gen.macros:
@@ -680,29 +713,35 @@ def generate_all_macros(output_dir: Path, csv_dir: Optional[Path] = None) -> Pat
         mant, exp = f"{value:.0e}".split("e")
         return rf"{mant}\times10^{{{int(exp)}}}"
 
-    try:
-        from src.models.orthogonal_learner import CTRLConfig
-        cfg = CTRLConfig()
-    except Exception:
-        cfg = None
+    cfg = _load_ctrl_config_defaults()
+
+    def _as_float(value: Any) -> Optional[float]:
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
 
     if cfg is not None:
-        gen.add("ParamKFold", cfg.k_folds, "Training Parameters")
-        gen.add("ParamNuisanceEpochs", cfg.nuisance_epochs, "Training Parameters")
-        gen.add("ParamTauEpochs", cfg.tau_epochs, "Training Parameters")
-        gen.add("ParamPluginEpochs", cfg.plugin_epochs, "Training Parameters")
-        gen.add("ParamDropout", cfg.dropout_p, "Training Parameters")
-        gen.add("ParamLambdaTau", _latex_sci(cfg.lambda_tau), "Training Parameters")
-        gen.add("ParamGradClip", cfg.grad_clip, "Training Parameters")
-        gen.add("ParamHiddenNuisance", cfg.hidden_dim, "Training Parameters")
-        gen.add("ParamHiddenTau", cfg.hidden_tau, "Training Parameters")
-        gen.add("ParamLrDml", _latex_sci(cfg.lr_tau), "Training Parameters")
-        gen.add("ParamLrPlugin", _latex_sci(cfg.lr_plugin), "Training Parameters")
-        gen.add("ParamWClip", cfg.w_clip, "Training Parameters")
-        gen.add("ParamZClip", cfg.z_clip, "Training Parameters")
-        gen.add("ParamEps", cfg.eps, "Training Parameters")
-        gen.add("ParamAuxBetaStart", cfg.aux_beta_start, "Training Parameters")
-        gen.add("ParamAuxBetaEnd", cfg.aux_beta_end, "Training Parameters")
+        gen.add("ParamKFold", cfg.get("k_folds", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamNuisanceEpochs", cfg.get("nuisance_epochs", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamTauEpochs", cfg.get("tau_epochs", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamPluginEpochs", cfg.get("plugin_epochs", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamDropout", cfg.get("dropout_p", MISSING_LATEX), "Training Parameters")
+        lambda_tau = _as_float(cfg.get("lambda_tau"))
+        gen.add("ParamLambdaTau", _latex_sci(lambda_tau) if lambda_tau is not None else MISSING_LATEX, "Training Parameters")
+        gen.add("ParamGradClip", cfg.get("grad_clip", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamHiddenNuisance", cfg.get("hidden_dim", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamHiddenTau", cfg.get("hidden_tau", MISSING_LATEX), "Training Parameters")
+        lr_tau = _as_float(cfg.get("lr_tau"))
+        lr_plugin = _as_float(cfg.get("lr_plugin"))
+        gen.add("ParamLrDml", _latex_sci(lr_tau) if lr_tau is not None else MISSING_LATEX, "Training Parameters")
+        gen.add("ParamLrPlugin", _latex_sci(lr_plugin) if lr_plugin is not None else MISSING_LATEX, "Training Parameters")
+        gen.add("ParamWClip", cfg.get("w_clip", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamWClipQuantile", cfg.get("w_clip_quantile", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamZClip", cfg.get("z_clip", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamZClipQuantile", cfg.get("z_clip_quantile", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamEps", cfg.get("eps", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamAuxBetaStart", cfg.get("aux_beta_start", MISSING_LATEX), "Training Parameters")
+        gen.add("ParamAuxBetaEnd", cfg.get("aux_beta_end", MISSING_LATEX), "Training Parameters")
     else:
         gen.add("ParamKFold", MISSING_LATEX, "Training Parameters")
         gen.add("ParamNuisanceEpochs", MISSING_LATEX, "Training Parameters")
@@ -716,7 +755,9 @@ def generate_all_macros(output_dir: Path, csv_dir: Optional[Path] = None) -> Pat
         gen.add("ParamLrDml", MISSING_LATEX, "Training Parameters")
         gen.add("ParamLrPlugin", MISSING_LATEX, "Training Parameters")
         gen.add("ParamWClip", MISSING_LATEX, "Training Parameters")
+        gen.add("ParamWClipQuantile", MISSING_LATEX, "Training Parameters")
         gen.add("ParamZClip", MISSING_LATEX, "Training Parameters")
+        gen.add("ParamZClipQuantile", MISSING_LATEX, "Training Parameters")
         gen.add("ParamEps", MISSING_LATEX, "Training Parameters")
         gen.add("ParamAuxBetaStart", MISSING_LATEX, "Training Parameters")
         gen.add("ParamAuxBetaEnd", MISSING_LATEX, "Training Parameters")

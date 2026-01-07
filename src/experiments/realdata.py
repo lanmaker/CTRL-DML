@@ -36,6 +36,7 @@ from src.models.orthogonal_learner import (
     predict_tau_rlearner,
     set_seed,
     CTRLConfig,
+    resolve_gate_flags,
 )
 from src.utils.io import get_output_manager
 
@@ -308,6 +309,7 @@ def _estimate_tarnet_oof_ate(
     seed: int,
     k_folds: int,
 ) -> float:
+    """Estimate ATE using OOF TARNet plug-in predictions (no gating for fair baseline)."""
     k_folds = _resolve_k_folds(T, k_folds)
     skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=seed)
     tau_oof = np.zeros(len(Y), dtype=np.float32)
@@ -316,8 +318,8 @@ def _estimate_tarnet_oof_ate(
         fold_seed = seed + 100 * (fold + 1)
         plugin_model = train_plugin(
             X[tr], Y[tr], T[tr],
-            use_gating=ctrl_config.use_gating,
-            lambda_sparsity=ctrl_config.lambda_sparsity,
+            use_gating=False,  # TARNet baseline: no gating
+            lambda_sparsity=0.0,  # No sparsity for vanilla TARNet
             seed=fold_seed,
             dropout_p=ctrl_config.dropout_p,
             hidden_dim=ctrl_config.hidden_tau,
@@ -340,12 +342,14 @@ def _estimate_ctrl_dml_oof_ate(
     k_folds = _resolve_k_folds(T, k_folds)
     skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=seed)
     tau_oof = np.zeros(len(Y), dtype=np.float32)
+    plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(ctrl_config)
+    warm_start_backbone = plugin_gating == tau_gating
 
     for fold, (tr, val) in enumerate(skf.split(X, T)):
         fold_seed = seed + 200 * (fold + 1)
         plugin_model = train_plugin(
             X[tr], Y[tr], T[tr],
-            use_gating=ctrl_config.use_gating,
+            use_gating=plugin_gating,
             lambda_sparsity=ctrl_config.lambda_sparsity,
             seed=fold_seed,
             dropout_p=ctrl_config.dropout_p,
@@ -357,7 +361,7 @@ def _estimate_ctrl_dml_oof_ate(
 
         m_hat, e_hat = cross_fit_nuisance(
             X[tr], Y[tr], T[tr],
-            use_gating=ctrl_config.use_gating,
+            use_gating=nuisance_gating,
             lambda_sparsity=ctrl_config.lambda_sparsity,
             seed=fold_seed,
             k_folds=ctrl_config.k_folds,
@@ -369,11 +373,18 @@ def _estimate_ctrl_dml_oof_ate(
         e_hat = np.clip(e_hat, 0.01, 0.99)
         R = Y[tr] - m_hat
         W = T[tr] - e_hat
-        Z, weights = stabilize_residuals(R, W, w_clip=ctrl_config.w_clip, z_clip=ctrl_config.z_clip, eps=ctrl_config.eps)
+        Z, weights = stabilize_residuals(
+            R, W,
+            w_clip=ctrl_config.w_clip,
+            z_clip=ctrl_config.z_clip,
+            eps=ctrl_config.eps,
+            w_clip_quantile=ctrl_config.w_clip_quantile,
+            z_clip_quantile=ctrl_config.z_clip_quantile,
+        )
 
         tau_model = train_rlearner(
             X[tr], Z, weights,
-            use_gating=ctrl_config.use_gating,
+            use_gating=tau_gating,
             lambda_tau=ctrl_config.lambda_tau,
             seed=fold_seed,
             dropout_p=ctrl_config.dropout_p,
@@ -383,6 +394,7 @@ def _estimate_ctrl_dml_oof_ate(
             lr=ctrl_config.lr_tau,
             grad_clip=ctrl_config.grad_clip,
             warm_start_from=plugin_model,
+            warm_start_backbone=warm_start_backbone,
             teacher_tau=tau_plugin_train,
             aux_beta_start=ctrl_config.aux_beta_start,
             aux_beta_end=ctrl_config.aux_beta_end,
@@ -468,6 +480,23 @@ def run_ate_estimation(
         "ci_upper": ols_ci_hi,
     })
 
+    # TARNet baseline (no gating, no sparsity)
+    def _tarnet_estimator(Xi, Ti, Yi, est_seed):
+        return _estimate_tarnet_oof_ate(
+            Xi, Ti, Yi, ctrl_config=ctrl_config, seed=est_seed, k_folds=k_folds
+        )
+
+    ate_tarnet, tarnet_ci_lo, tarnet_ci_hi = bootstrap_refit_ate(
+        _tarnet_estimator, X, T, Y, n_bootstrap=n_bootstrap, seed=seed, alpha=alpha
+    )
+    rows.append({
+        "dataset": dataset_name,
+        "method": "TARNet",
+        "ate": ate_tarnet,
+        "ci_lower": tarnet_ci_lo,
+        "ci_upper": tarnet_ci_hi,
+    })
+
     # CTRL-DML
     def _ctrl_dml_estimator(Xi, Ti, Yi, est_seed):
         return _estimate_ctrl_dml_oof_ate(
@@ -523,6 +552,7 @@ def run_balance_check(
     if FAST_RUN:
         ctrl_config.k_folds = min(3, k_folds)
     set_seed(seed)
+    _, nuisance_gating, _ = resolve_gate_flags(ctrl_config)
 
     # Unweighted balance
     unweighted = compute_smd(X, T)
@@ -535,7 +565,7 @@ def run_balance_check(
     # Propensity-weighted balance
     m_hat, e_hat = cross_fit_nuisance(
         X, Y, T,
-        use_gating=ctrl_config.use_gating,
+        use_gating=nuisance_gating,
         lambda_sparsity=ctrl_config.lambda_sparsity,
         seed=seed,
         k_folds=ctrl_config.k_folds,

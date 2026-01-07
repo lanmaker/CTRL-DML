@@ -27,6 +27,7 @@ from src.models.orthogonal_learner import (
     predict_tau_rlearner,
     set_seed,
     CTRLConfig,
+    resolve_gate_flags,
 )
 from src.models.dragonnet import get_device
 from src.utils.io import get_output_manager
@@ -57,9 +58,10 @@ def _fit_nuisance_full(
     seed: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Fit nuisance network on full data and return in-sample m_hat, e_hat."""
+    _, nuisance_gating, _ = resolve_gate_flags(cfg)
     model = train_nuisance(
         X, Y, T,
-        use_gating=cfg.use_gating,
+        use_gating=nuisance_gating,
         lambda_sparsity=cfg.lambda_sparsity,
         seed=seed,
         dropout_p=cfg.dropout_p,
@@ -88,6 +90,8 @@ def run_crossfit_ablation(config: CrossfitConfig) -> pd.DataFrame:
         cfg.nuisance_epochs = 80
         cfg.tau_epochs = 150
         cfg.k_folds = min(3, cfg.k_folds)
+    plugin_gating, nuisance_gating, tau_gating = resolve_gate_flags(cfg)
+    warm_start_backbone = plugin_gating == tau_gating
 
     for seed in config.seeds:
         print(f"Seed {seed}...")
@@ -107,7 +111,7 @@ def run_crossfit_ablation(config: CrossfitConfig) -> pd.DataFrame:
         # Plugin warm start (shared across variants).
         plugin_model = train_plugin(
             X_train, Y_train, T_train,
-            use_gating=cfg.use_gating,
+            use_gating=plugin_gating,
             lambda_sparsity=cfg.lambda_sparsity,
             seed=seed,
             dropout_p=cfg.dropout_p,
@@ -122,7 +126,7 @@ def run_crossfit_ablation(config: CrossfitConfig) -> pd.DataFrame:
         # Cross-fitted nuisances.
         m_cf, e_cf = cross_fit_nuisance(
             X_train, Y_train, T_train,
-            use_gating=cfg.use_gating,
+            use_gating=nuisance_gating,
             lambda_sparsity=cfg.lambda_sparsity,
             seed=seed,
             k_folds=cfg.k_folds,
@@ -132,11 +136,17 @@ def run_crossfit_ablation(config: CrossfitConfig) -> pd.DataFrame:
             epochs=cfg.nuisance_epochs,
         )
         e_cf = np.clip(e_cf, 0.01, 0.99)
-        Z_cf, w_cf = stabilize_residuals(Y_train - m_cf, T_train - e_cf,
-                                         w_clip=cfg.w_clip, z_clip=cfg.z_clip, eps=cfg.eps)
+        Z_cf, w_cf = stabilize_residuals(
+            Y_train - m_cf, T_train - e_cf,
+            w_clip=cfg.w_clip,
+            z_clip=cfg.z_clip,
+            eps=cfg.eps,
+            w_clip_quantile=cfg.w_clip_quantile,
+            z_clip_quantile=cfg.z_clip_quantile,
+        )
         tau_cf_model = train_rlearner(
             X_train, Z_cf, w_cf,
-            use_gating=cfg.use_gating,
+            use_gating=tau_gating,
             lambda_tau=cfg.lambda_tau,
             seed=seed,
             dropout_p=cfg.dropout_p,
@@ -146,6 +156,7 @@ def run_crossfit_ablation(config: CrossfitConfig) -> pd.DataFrame:
             lr=cfg.lr_tau,
             grad_clip=cfg.grad_clip,
             warm_start_from=plugin_model,
+            warm_start_backbone=warm_start_backbone,
             teacher_tau=tau_plugin_train,
             aux_beta_start=cfg.aux_beta_start,
             aux_beta_end=cfg.aux_beta_end,
@@ -156,11 +167,17 @@ def run_crossfit_ablation(config: CrossfitConfig) -> pd.DataFrame:
 
         # In-sample nuisances (no cross-fitting).
         m_nf, e_nf = _fit_nuisance_full(X_train, Y_train, T_train, cfg, seed)
-        Z_nf, w_nf = stabilize_residuals(Y_train - m_nf, T_train - e_nf,
-                                         w_clip=cfg.w_clip, z_clip=cfg.z_clip, eps=cfg.eps)
+        Z_nf, w_nf = stabilize_residuals(
+            Y_train - m_nf, T_train - e_nf,
+            w_clip=cfg.w_clip,
+            z_clip=cfg.z_clip,
+            eps=cfg.eps,
+            w_clip_quantile=cfg.w_clip_quantile,
+            z_clip_quantile=cfg.z_clip_quantile,
+        )
         tau_nf_model = train_rlearner(
             X_train, Z_nf, w_nf,
-            use_gating=cfg.use_gating,
+            use_gating=tau_gating,
             lambda_tau=cfg.lambda_tau,
             seed=seed,
             dropout_p=cfg.dropout_p,
@@ -170,6 +187,7 @@ def run_crossfit_ablation(config: CrossfitConfig) -> pd.DataFrame:
             lr=cfg.lr_tau,
             grad_clip=cfg.grad_clip,
             warm_start_from=plugin_model,
+            warm_start_backbone=warm_start_backbone,
             teacher_tau=tau_plugin_train,
             aux_beta_start=cfg.aux_beta_start,
             aux_beta_end=cfg.aux_beta_end,

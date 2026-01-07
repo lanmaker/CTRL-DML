@@ -28,6 +28,8 @@ from src.models.orthogonal_learner import (
     CTRLOrthogonalLearner,
     CTRLConfig,
     set_seed,
+    train_plugin,
+    predict_tau_tarnet,
 )
 from src.utils.metrics import compute_pehe, compute_ate
 from src.utils.io import get_output_manager
@@ -88,10 +90,24 @@ def run_ihdp_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
 
             # Evaluate on test set
             tau_pred = model.predict_tau(data["X_test"])
-            tau_plugin = model.predict_plugin(data["X_test"])
+
+            # Train vanilla TARNet baseline (no gating, no sparsity)
+            tarnet_model = train_plugin(
+                data["X_train"],
+                data["Y_train"],
+                data["T_train"],
+                use_gating=False,
+                lambda_sparsity=0.0,
+                seed=seed,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
+                epochs=ctrl_config.plugin_epochs,
+            )
+            tau_tarnet = predict_tau_tarnet(tarnet_model, data["X_test"])
 
             pehe_dml = compute_pehe(tau_pred, data["cate_test"])
-            pehe_plugin = compute_pehe(tau_plugin, data["cate_test"])
+            pehe_tarnet = compute_pehe(tau_tarnet, data["cate_test"])
             ate_bias = compute_ate(tau_pred) - compute_ate(data["cate_test"])
 
             rows.append({
@@ -99,7 +115,7 @@ def run_ihdp_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
                 "replicate": rep,
                 "seed": seed,
                 "pehe_dml": pehe_dml,
-                "pehe_plugin": pehe_plugin,
+                "pehe_tarnet": pehe_tarnet,
                 "ate_bias": ate_bias,
             })
 
@@ -161,17 +177,31 @@ def run_twins_benchmark(config: BenchmarkConfig) -> pd.DataFrame:
         ite_test = ite_true[test_idx]
 
         tau_pred = model.predict_tau(X_test)
-        tau_plugin = model.predict_plugin(X_test)
+
+        # Train vanilla TARNet baseline (no gating, no sparsity)
+        tarnet_model = train_plugin(
+            X_train,
+            Y_train,
+            T_train,
+            use_gating=False,
+            lambda_sparsity=0.0,
+            seed=seed,
+            dropout_p=ctrl_config.dropout_p,
+            hidden_dim=ctrl_config.hidden_tau,
+            batch_size=ctrl_config.batch_size,
+            epochs=ctrl_config.plugin_epochs,
+        )
+        tau_tarnet = predict_tau_tarnet(tarnet_model, X_test)
 
         pehe_dml = compute_pehe(tau_pred, ite_test)
-        pehe_plugin = compute_pehe(tau_plugin, ite_test)
+        pehe_tarnet = compute_pehe(tau_tarnet, ite_test)
         ate_bias = compute_ate(tau_pred) - compute_ate(ite_test)
 
         rows.append({
             "dataset": "twins",
             "seed": seed,
             "pehe_dml": pehe_dml,
-            "pehe_plugin": pehe_plugin,
+            "pehe_tarnet": pehe_tarnet,
             "ate_bias": ate_bias,
         })
 
@@ -225,13 +255,27 @@ def run_acic_benchmark(
 
             # Predict
             tau_pred = model.predict_tau(X_test)
-            tau_plugin = model.predict_plugin(X_test)
+
+            # Train vanilla TARNet baseline (no gating, no sparsity)
+            tarnet_model = train_plugin(
+                X_train,
+                Y_train,
+                T_train,
+                use_gating=False,
+                lambda_sparsity=0.0,
+                seed=seed,
+                dropout_p=ctrl_config.dropout_p,
+                hidden_dim=ctrl_config.hidden_tau,
+                batch_size=ctrl_config.batch_size,
+                epochs=ctrl_config.plugin_epochs,
+            )
+            tau_tarnet = predict_tau_tarnet(tarnet_model, X_test)
 
             rows.append({
                 "dataset": f"acic_{ds_name}",
                 "seed": seed,
                 "ate_dml": compute_ate(tau_pred),
-                "ate_plugin": compute_ate(tau_plugin),
+                "ate_tarnet": compute_ate(tau_tarnet),
             })
 
     return pd.DataFrame(rows)

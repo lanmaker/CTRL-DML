@@ -30,22 +30,32 @@ COLORS = {
 
 
 def extract_model_masks(
-    X: np.ndarray,
-    T: np.ndarray,
-    y: np.ndarray,
+    X_train: np.ndarray,
+    T_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray,
     seed: int = 42,
     hidden_dim: int = 120,
     epochs: int = 100,
 ) -> tuple:
     """
-    Train CTRL-DML models and extract learned mask weights.
+    Train CTRL-DML model on TRAIN set and extract masks on TEST set.
+
+    This avoids optimistic bias from in-sample evaluation.
+
+    Args:
+        X_train, T_train, y_train: Training data
+        X_test: Test data for mask extraction (held-out)
+        seed: Random seed
+        hidden_dim: Hidden layer dimension
+        epochs: Training epochs
 
     Returns:
-        Tuple of (M_T, M_Y) - normalized mask weights for treatment and outcome
+        Tuple of (M_T, M_Y, mask_weights) - normalized mask weights from test set
     """
-    # Train nuisance model (has treatment and outcome heads)
+    # Train nuisance model on TRAIN set only
     model = train_nuisance(
-        X, y, T,
+        X_train, y_train, T_train,
         use_gating=True,
         lambda_sparsity=0.05,
         seed=seed,
@@ -53,39 +63,35 @@ def extract_model_masks(
         epochs=epochs,
     )
 
-    # Extract mask weights by passing data through
+    # Extract mask weights on TEST set (held-out)
     model.eval()
     with torch.no_grad():
-        x_t = torch.from_numpy(X).float().to(DEVICE)
+        x_test_t = torch.from_numpy(X_test).float().to(DEVICE)
 
         # Get mask from TabularAttention
-        # The backbone contains the attention layer
         if hasattr(model.backbone, 'attn') and hasattr(model.backbone.attn, 'mask_net'):
-            mask = model.backbone.attn.mask_net(x_t)
-            mask_weights = mask.mean(dim=0).cpu().numpy()  # Average across samples
+            mask = model.backbone.attn.mask_net(x_test_t)
+            mask_weights = mask.mean(dim=0).cpu().numpy()
         else:
-            # Fallback if structure is different
-            mask_weights = np.ones(X.shape[1])
+            mask_weights = np.ones(X_test.shape[1])
 
-        # Get predictions for T and Y to compute importance
-        y0, y1, t_prob = model(x_t)
-
-    # Compute gradient-based importance for T head
+    # Compute gradient-based importance for T head on TEST set
     model.train()
-    x_t.requires_grad_(True)
-    _, _, t_logits = model(x_t)
+    x_test_t = torch.from_numpy(X_test).float().to(DEVICE)
+    x_test_t.requires_grad_(True)
+    _, _, t_logits = model(x_test_t)
     t_loss = t_logits.sum()
     t_loss.backward()
-    M_T = np.abs(x_t.grad.mean(dim=0).cpu().numpy())
+    M_T = np.abs(x_test_t.grad.mean(dim=0).cpu().numpy())
     M_T = M_T / (M_T.max() + 1e-8)
 
-    # Compute gradient-based importance for Y heads
-    x_t = torch.from_numpy(X).float().to(DEVICE)
-    x_t.requires_grad_(True)
-    y0, y1, _ = model(x_t)
+    # Compute gradient-based importance for Y heads on TEST set
+    x_test_t = torch.from_numpy(X_test).float().to(DEVICE)
+    x_test_t.requires_grad_(True)
+    y0, y1, _ = model(x_test_t)
     y_loss = (y0.sum() + y1.sum())
     y_loss.backward()
-    M_Y = np.abs(x_t.grad.mean(dim=0).cpu().numpy())
+    M_Y = np.abs(x_test_t.grad.mean(dim=0).cpu().numpy())
     M_Y = M_Y / (M_Y.max() + 1e-8)
 
     return M_T, M_Y, mask_weights
@@ -141,9 +147,10 @@ def compute_feature_roles(
     n_prog: int = 5,
     use_model: bool = True,
     seed: int = 42,
+    test_ratio: float = 0.2,
 ) -> pd.DataFrame:
     """
-    Compute feature role scores.
+    Compute feature role scores using train/test split to avoid optimistic bias.
 
     Args:
         X: Covariates (n_samples, n_features)
@@ -154,18 +161,31 @@ def compute_feature_roles(
         n_prog: Number of true prognostic features
         use_model: If True, train CTRL-DML model and extract masks
         seed: Random seed
+        test_ratio: Fraction of data to hold out for evaluation
 
     Returns:
         DataFrame with role scores for each feature
     """
     n_features = X.shape[1]
 
+    # Train/test split to avoid in-sample evaluation bias
+    rng = np.random.default_rng(seed)
+    n = len(y)
+    idx = rng.permutation(n)
+    n_test = int(n * test_ratio)
+    test_idx, train_idx = idx[:n_test], idx[n_test:]
+
+    X_train, X_test = X[train_idx], X[test_idx]
+    T_train, y_train = T[train_idx], y[train_idx]
+
     if use_model:
-        print("  Training CTRL-DML model to extract masks...")
-        M_T, M_Y, mask_weights = extract_model_masks(X, T, y, seed=seed)
+        print(f"  Training CTRL-DML on {len(train_idx)} samples, evaluating on {len(test_idx)}...")
+        M_T, M_Y, mask_weights = extract_model_masks(
+            X_train, T_train, y_train, X_test, seed=seed
+        )
     else:
         print("  Using linear proxy (logistic/ridge regression)...")
-        M_T, M_Y = compute_feature_roles_linear(X, T, y)
+        M_T, M_Y = compute_feature_roles_linear(X_train, T_train, y_train)
         mask_weights = np.ones(n_features)
 
     # Compute role scores
